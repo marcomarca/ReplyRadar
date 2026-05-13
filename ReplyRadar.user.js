@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ReplyRadar
 // @namespace    https://github.com/marcomarca/ReplyRadar
-// @version      1.4.5
+// @version      1.4.7
 // @description  Navegador flotante de conversaciones y notificador de respuestas para ChatGPT y Gemini.
 // @author       marcomarca
 // @homepageURL  https://github.com/marcomarca/ReplyRadar
