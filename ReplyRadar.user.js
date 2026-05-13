@@ -34,7 +34,7 @@
           createHTML: (s) => s,
         });
         break;
-      } catch (_) {}
+      } catch (_) { }
     }
   }
 
@@ -52,7 +52,9 @@
     alarmEnabled: '__cg_nav_alarm_enabled_v1',
   };
 
-  const ALARM_COOLDOWN_MS = 1200;
+  const ALARM_COOLDOWN_MS = 13500;
+  const ALARM_CHIME_REPEAT_COUNT = 2;
+  const ALARM_CHIME_REPEAT_INTERVAL_SEC = 2.75;
   const CHATGPT_LAT_COMPLETION_URL = 'https://chatgpt.com/backend-api/lat/r';
   const CHATGPT_NETWORK_HOOK_RETRY_MS = 2000;
 
@@ -514,7 +516,7 @@
   function writeStorageJson(key, value) {
     try {
       localStorage.setItem(key, JSON.stringify(value));
-    } catch (_) {}
+    } catch (_) { }
   }
 
   function loadUiPreferences() {
@@ -555,7 +557,7 @@
 
     try {
       localStorage.setItem(STORAGE_KEYS.theme, STATE.themeMode);
-    } catch (_) {}
+    } catch (_) { }
 
     applyTheme();
   }
@@ -664,7 +666,7 @@
 
     try {
       localStorage.setItem(STORAGE_KEYS.alarmEnabled, STATE.alarmEnabled ? '1' : '0');
-    } catch (_) {}
+    } catch (_) { }
 
     if (STATE.alarmEnabled) {
       initAlarmAudio();
@@ -691,9 +693,9 @@
         if (Ctx) STATE.alarmAudioCtx = new Ctx();
       }
       if (STATE.alarmAudioCtx && STATE.alarmAudioCtx.state === 'suspended') {
-        STATE.alarmAudioCtx.resume().catch(() => {});
+        STATE.alarmAudioCtx.resume().catch(() => { });
       }
-    } catch (_) {}
+    } catch (_) { }
   }
 
   function startAlarmKeepAlive() {
@@ -706,9 +708,9 @@
       const audio = new Audio(URL.createObjectURL(blob));
       audio.loop = true;
       audio.volume = 0.01;
-      audio.play().catch(() => {});
+      audio.play().catch(() => { });
       STATE.alarmKeepAliveAudio = audio;
-    } catch (_) {}
+    } catch (_) { }
   }
 
   function stopAlarmKeepAlive() {
@@ -718,7 +720,7 @@
     try {
       audio.pause();
       audio.src = '';
-    } catch (_) {}
+    } catch (_) { }
 
     STATE.alarmKeepAliveAudio = null;
   }
@@ -726,6 +728,164 @@
   function shouldDeliverAlarm() {
     return STATE.alarmEnabled && (document.hidden || !document.hasFocus());
   }
+
+  function scheduleGainEnvelope(gainParam, startAt, peak, attack = 0.018, hold = 0.035, release = 1.85) {
+    const floor = 0.0001;
+    try {
+      gainParam.cancelScheduledValues(startAt);
+      gainParam.setValueAtTime(floor, startAt);
+      gainParam.linearRampToValueAtTime(peak, startAt + attack);
+      gainParam.setValueAtTime(peak * 0.82, startAt + attack + hold);
+      gainParam.exponentialRampToValueAtTime(floor, startAt + attack + hold + release);
+    } catch (_) { }
+  }
+
+  function createAlarmImpulseResponse(ctx, duration = 2.35, decay = 3.2) {
+    const sampleRate = ctx.sampleRate || 44100;
+    const length = Math.max(1, Math.floor(sampleRate * duration));
+    const impulse = ctx.createBuffer(2, length, sampleRate);
+
+    for (let channel = 0; channel < impulse.numberOfChannels; channel += 1) {
+      const data = impulse.getChannelData(channel);
+      for (let i = 0; i < length; i += 1) {
+        const t = i / length;
+        const envelope = Math.pow(1 - t, decay);
+        data[i] = (Math.random() * 2 - 1) * envelope * 0.34;
+      }
+    }
+
+    return impulse;
+  }
+
+  function makeAlarmOutputChain(ctx) {
+    const dry = ctx.createGain();
+    const wet = ctx.createGain();
+    const master = ctx.createGain();
+    const highpass = ctx.createBiquadFilter();
+    const lowpass = ctx.createBiquadFilter();
+    const compressor = ctx.createDynamicsCompressor();
+    const delay = ctx.createDelay(1.0);
+    const delayFeedback = ctx.createGain();
+    const convolver = ctx.createConvolver();
+
+    dry.gain.setValueAtTime(0.82, ctx.currentTime);
+    wet.gain.setValueAtTime(0.26, ctx.currentTime);
+    master.gain.setValueAtTime(0.72, ctx.currentTime);
+
+    highpass.type = 'highpass';
+    highpass.frequency.setValueAtTime(180, ctx.currentTime);
+    highpass.Q.setValueAtTime(0.72, ctx.currentTime);
+
+    lowpass.type = 'lowpass';
+    lowpass.frequency.setValueAtTime(7600, ctx.currentTime);
+    lowpass.Q.setValueAtTime(0.52, ctx.currentTime);
+
+    compressor.threshold.setValueAtTime(-22, ctx.currentTime);
+    compressor.knee.setValueAtTime(18, ctx.currentTime);
+    compressor.ratio.setValueAtTime(3.2, ctx.currentTime);
+    compressor.attack.setValueAtTime(0.006, ctx.currentTime);
+    compressor.release.setValueAtTime(0.22, ctx.currentTime);
+
+    delay.delayTime.setValueAtTime(0.145, ctx.currentTime);
+    delayFeedback.gain.setValueAtTime(0.16, ctx.currentTime);
+    convolver.buffer = createAlarmImpulseResponse(ctx);
+
+    dry.connect(highpass);
+    highpass.connect(lowpass);
+    lowpass.connect(compressor);
+    compressor.connect(master);
+    compressor.connect(delay);
+    compressor.connect(convolver);
+    delay.connect(delayFeedback);
+    delayFeedback.connect(delay);
+    delay.connect(wet);
+    convolver.connect(wet);
+    wet.connect(master);
+    master.connect(ctx.destination);
+
+    const nodes = [dry, wet, master, highpass, lowpass, compressor, delay, delayFeedback, convolver];
+    dry.__cgNavDisconnect = () => {
+      nodes.forEach((node) => {
+        try { node.disconnect(); } catch (_) { }
+      });
+    };
+
+    return dry;
+  }
+
+  function scheduleBellPartial(ctx, output, frequency, startAt, gainValue, duration, type = 'sine', detune = 0) {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const panner = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+
+    osc.type = type;
+    osc.frequency.setValueAtTime(frequency, startAt);
+    if (osc.detune) osc.detune.setValueAtTime(detune, startAt);
+
+    scheduleGainEnvelope(gain.gain, startAt, gainValue, 0.016, 0.025, duration);
+
+    osc.connect(gain);
+    if (panner) {
+      const pan = Math.max(-0.34, Math.min(0.34, Math.sin(frequency * 0.017) * 0.22));
+      panner.pan.setValueAtTime(pan, startAt);
+      gain.connect(panner);
+      panner.connect(output);
+    } else {
+      gain.connect(output);
+    }
+
+    osc.start(startAt);
+    osc.stop(startAt + duration + 0.12);
+  }
+
+  function playAppleInspiredChime() {
+    initAlarmAudio();
+    const ctx = STATE.alarmAudioCtx;
+    if (!ctx) return false;
+
+    const startAt = ctx.currentTime + 0.018;
+    const output = makeAlarmOutputChain(ctx);
+
+    // Campana sintética: Dmaj9 ascendente, ataque limpio y cola amplia.
+    // El mismo motivo se repite 4 veces para que no sea fácil de ignorar.
+    // No usa ni replica assets propietarios; sólo osciladores Web Audio.
+    const motif = [
+      { t: 0.00, f: 587.33, g: 0.080, d: 1.55 }, // D5
+      { t: 0.14, f: 739.99, g: 0.070, d: 1.65 }, // F#5
+      { t: 0.30, f: 880.00, g: 0.066, d: 1.80 }, // A5
+      { t: 0.54, f: 1108.73, g: 0.054, d: 1.95 }, // C#6
+      { t: 0.84, f: 1174.66, g: 0.050, d: 2.05 }, // D6
+    ];
+
+    const scheduleChimeOnce = (baseAt, gainScale = 1) => {
+      motif.forEach((note) => {
+        const t = baseAt + note.t;
+        scheduleBellPartial(ctx, output, note.f, t, note.g * gainScale, note.d, 'sine', -2);
+        scheduleBellPartial(ctx, output, note.f * 2.01, t + 0.006, note.g * 0.34 * gainScale, note.d * 0.82, 'triangle', 3);
+        scheduleBellPartial(ctx, output, note.f * 3.01, t + 0.012, note.g * 0.12 * gainScale, note.d * 0.55, 'sine', -5);
+      });
+
+      // Refuerzo muy suave al final: hace que la notificación dure sin volverse agresiva.
+      scheduleBellPartial(ctx, output, 1479.98, baseAt + 1.18, 0.028 * gainScale, 1.65, 'sine', 1); // F#6
+      scheduleBellPartial(ctx, output, 1760.00, baseAt + 1.34, 0.020 * gainScale, 1.45, 'sine', -3); // A6
+    };
+
+    for (let i = 0; i < ALARM_CHIME_REPEAT_COUNT; i += 1) {
+      const baseAt = startAt + (i * ALARM_CHIME_REPEAT_INTERVAL_SEC);
+      const gainScale = Math.max(0.72, 1 - (i * 0.06));
+      scheduleChimeOnce(baseAt, gainScale);
+    }
+
+    const totalMs = Math.ceil(((ALARM_CHIME_REPEAT_COUNT - 1) * ALARM_CHIME_REPEAT_INTERVAL_SEC + 4.2) * 1000);
+    window.setTimeout(() => {
+      try {
+        if (output && typeof output.__cgNavDisconnect === 'function') output.__cgNavDisconnect();
+      } catch (_) { }
+    }, totalMs);
+
+    return true;
+  }
+
 
   function triggerAlarm(message = 'Alarma de conversación.') {
     const now = Date.now();
@@ -737,36 +897,13 @@
     try {
       initAlarmAudio();
 
-      if (STATE.alarmAudioCtx) {
-        const ctx = STATE.alarmAudioCtx;
-        const startAt = ctx.currentTime;
-        const pattern = [
-          { frequency: 880, duration: 0.18, gain: 0.17 },
-          { frequency: 1046, duration: 0.18, gain: 0.17 },
-          { frequency: 880, duration: 0.28, gain: 0.20 },
-        ];
-
-        let cursor = startAt;
-        pattern.forEach((tone) => {
-          const osc = ctx.createOscillator();
-          const gain = ctx.createGain();
-          osc.frequency.setValueAtTime(tone.frequency, cursor);
-          gain.gain.setValueAtTime(0.0001, cursor);
-          gain.gain.linearRampToValueAtTime(tone.gain, cursor + 0.02);
-          gain.gain.exponentialRampToValueAtTime(0.0001, cursor + tone.duration);
-          osc.connect(gain);
-          gain.connect(ctx.destination);
-          osc.start(cursor);
-          osc.stop(cursor + tone.duration);
-          cursor += tone.duration + 0.05;
-        });
-      }
+      playAppleInspiredChime();
 
       if (typeof GM_notification === 'function') {
         GM_notification({
           title: PLATFORM === 'gemini' ? 'Gemini' : 'ChatGPT',
           text: message,
-          timeout: 6000,
+          timeout: 12000,
           onclick: () => window.focus(),
         });
       }
@@ -781,7 +918,7 @@
   function getUserscriptWindow() {
     try {
       if (typeof unsafeWindow !== 'undefined' && unsafeWindow) return unsafeWindow;
-    } catch (_) {}
+    } catch (_) { }
     return window;
   }
 
@@ -792,7 +929,7 @@
       if (input && typeof input.href === 'string') return input.href;
       if (input && typeof input.url === 'string') return input.url;
       if (input && typeof input.toString === 'function') return input.toString();
-    } catch (_) {}
+    } catch (_) { }
     return '';
   }
 
@@ -800,7 +937,7 @@
     try {
       if (init && typeof init.method === 'string') return init.method.toUpperCase();
       if (input && typeof input.method === 'string') return input.method.toUpperCase();
-    } catch (_) {}
+    } catch (_) { }
     return 'GET';
   }
 
@@ -854,7 +991,7 @@
 
       const originalFetch = pageWindow.fetch;
 
-      const wrappedFetch = function(...args) {
+      const wrappedFetch = function (...args) {
         const input = args[0];
         const init = args[1];
         const url = extractRequestUrl(input);
@@ -869,7 +1006,7 @@
 
       markHookedFunction(wrappedFetch, '__cgNavChatGptFetchHook');
       pageWindow.fetch = wrappedFetch;
-    } catch (_) {}
+    } catch (_) { }
   }
 
   function hookChatGptXhr(pageWindow) {
@@ -882,7 +1019,7 @@
       if (!isHookedFunction(proto.open, '__cgNavChatGptXhrOpenHook')) {
         const originalOpen = proto.open;
 
-        const wrappedOpen = function(method, url) {
+        const wrappedOpen = function (method, url) {
           try {
             const requestMethod = String(method || 'GET').toUpperCase();
             const requestUrl = extractRequestUrl(url);
@@ -901,7 +1038,7 @@
       if (!isHookedFunction(proto.send, '__cgNavChatGptXhrSendHook')) {
         const originalSend = proto.send;
 
-        const wrappedSend = function() {
+        const wrappedSend = function () {
           if (this.__cgNavChatGptLatRequest) {
             registerChatGptLatCompletion();
           }
@@ -912,7 +1049,7 @@
         markHookedFunction(wrappedSend, '__cgNavChatGptXhrSendHook');
         proto.send = wrappedSend;
       }
-    } catch (_) {}
+    } catch (_) { }
   }
 
   function startChatGptNetworkMonitor() {
@@ -958,25 +1095,13 @@
     try {
       initAlarmAudio();
 
-      if (STATE.alarmAudioCtx) {
-        const ctx = STATE.alarmAudioCtx;
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-
-        osc.frequency.setValueAtTime(880, ctx.currentTime);
-        gain.gain.setValueAtTime(0.2, ctx.currentTime);
-
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.start();
-        osc.stop(ctx.currentTime + 0.8);
-      }
+      playAppleInspiredChime();
 
       if (typeof GM_notification === 'function') {
         GM_notification({
           title: 'Gemini',
           text: 'Flujo de red completado.',
-          timeout: 5000,
+          timeout: 12000,
           onclick: () => window.focus(),
         });
       }
@@ -998,7 +1123,7 @@
     } catch (_) {
       try {
         fn[markerName] = true;
-      } catch (_) {}
+      } catch (_) { }
     }
   }
 
@@ -1038,11 +1163,11 @@
 
       const originalOpen = proto.open;
 
-      const wrappedOpen = function(method, url) {
+      const wrappedOpen = function (method, url) {
         if (isGeminiBatchExecuteUrl(extractRequestUrl(url))) {
           try {
             this.addEventListener('loadstart', registerGeminiNetworkPulse);
-          } catch (_) {}
+          } catch (_) { }
         }
 
         return originalOpen.apply(this, arguments);
@@ -1050,7 +1175,7 @@
 
       markHookedFunction(wrappedOpen, '__cgNavGeminiXhrOpenHook');
       proto.open = wrappedOpen;
-    } catch (_) {}
+    } catch (_) { }
   }
 
   function hookGeminiFetch(pageWindow) {
@@ -1060,7 +1185,7 @@
 
       const originalFetch = pageWindow.fetch;
 
-      const wrappedFetch = function(...args) {
+      const wrappedFetch = function (...args) {
         const url = extractRequestUrl(args[0]);
         if (isGeminiBatchExecuteUrl(url)) {
           registerGeminiNetworkPulse();
@@ -1071,7 +1196,7 @@
 
       markHookedFunction(wrappedFetch, '__cgNavGeminiFetchHook');
       pageWindow.fetch = wrappedFetch;
-    } catch (_) {}
+    } catch (_) { }
   }
 
   function startGeminiNetworkMonitor() {
@@ -1445,7 +1570,7 @@
 
     try {
       event.currentTarget.setPointerCapture(event.pointerId);
-    } catch (_) {}
+    } catch (_) { }
 
     event.preventDefault();
   }
@@ -1472,7 +1597,7 @@
 
     try {
       event.currentTarget.releasePointerCapture(event.pointerId);
-    } catch (_) {}
+    } catch (_) { }
 
     savePanelPosition({
       left: parseFloat(STATE.panel.style.left) || 18,
@@ -1854,7 +1979,7 @@
         refreshAlarmControls();
       }
       startObservers();
-    } catch (_) {}
+    } catch (_) { }
   }
 
   function boot() {
