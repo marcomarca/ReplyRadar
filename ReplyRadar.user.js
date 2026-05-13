@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         ReplyRadar
 // @namespace    https://github.com/marcomarca/ReplyRadar
-// @version      1.4.7
-// @description  Navegador flotante de conversaciones y notificador de respuestas para ChatGPT y Gemini.
+// @version      1.4.9
+// @description  Navegador flotante de conversaciones con menú superior, alarma, chime especial repetido y control de volumen para ChatGPT y Gemini.
 // @author       marcomarca
 // @homepageURL  https://github.com/marcomarca/ReplyRadar
 // @supportURL   https://github.com/marcomarca/ReplyRadar/issues
@@ -50,11 +50,15 @@
     position: '__cg_nav_position_v1',
     theme: '__cg_nav_theme_v1',
     alarmEnabled: '__cg_nav_alarm_enabled_v1',
+    alarmVolume: '__cg_nav_alarm_volume_v1',
   };
 
   const ALARM_COOLDOWN_MS = 13500;
   const ALARM_CHIME_REPEAT_COUNT = 2;
   const ALARM_CHIME_REPEAT_INTERVAL_SEC = 2.75;
+  const ALARM_VOLUME_DEFAULT = 0.72;
+  const ALARM_VOLUME_MIN = 0;
+  const ALARM_VOLUME_MAX = 1.35;
   const CHATGPT_LAT_COMPLETION_URL = 'https://chatgpt.com/backend-api/lat/r';
   const CHATGPT_NETWORK_HOOK_RETRY_MS = 2000;
 
@@ -74,6 +78,7 @@
     observer: null,
     panel: null,
     listModal: null,
+    optionsMenu: null,
     initialized: false,
     navLockUntil: 0,
     navLockIndex: -1,
@@ -84,6 +89,7 @@
     resolvedTheme: 'dark',
     panelPosition: null,
     alarmEnabled: false,
+    alarmVolume: ALARM_VOLUME_DEFAULT,
     alarmAudioCtx: null,
     alarmKeepAliveAudio: null,
     lastAlarmAt: 0,
@@ -535,6 +541,11 @@
 
     const storedAlarmEnabled = localStorage.getItem(STORAGE_KEYS.alarmEnabled);
     STATE.alarmEnabled = storedAlarmEnabled === '1';
+
+    const storedAlarmVolume = Number(localStorage.getItem(STORAGE_KEYS.alarmVolume));
+    if (Number.isFinite(storedAlarmVolume)) {
+      STATE.alarmVolume = clampAlarmVolume(storedAlarmVolume);
+    }
   }
 
   function getResolvedTheme() {
@@ -641,7 +652,18 @@
   function refreshThemeControls() {
     const controls = document.querySelectorAll('[data-role="__cg_nav_theme_toggle"]');
     controls.forEach((button) => {
-      setSafeInnerHTML(button, getThemeIconSvg(STATE.themeMode));
+      const isMenuControl = button.dataset.display === '__cg_nav_menu';
+      if (isMenuControl) {
+        setSafeInnerHTML(button, `
+          <span class="__cg_nav_menu_label">
+            ${getThemeIconSvg(STATE.themeMode)}
+            <span>Tema</span>
+          </span>
+          <span class="__cg_nav_menu_value">${STATE.themeMode}</span>
+        `);
+      } else {
+        setSafeInnerHTML(button, getThemeIconSvg(STATE.themeMode));
+      }
       button.setAttribute('aria-label', `Tema: ${STATE.themeMode}`);
       button.setAttribute('data-theme-mode', STATE.themeMode);
       button.title = `Tema: ${STATE.themeMode}. Click para alternar.`;
@@ -651,13 +673,62 @@
   function refreshAlarmControls() {
     const controls = document.querySelectorAll('[data-role="__cg_nav_alarm_toggle"]');
     controls.forEach((button) => {
-      setSafeInnerHTML(button, getAlarmIconSvg(STATE.alarmEnabled));
+      const isMenuControl = button.dataset.display === '__cg_nav_menu';
+      if (isMenuControl) {
+        setSafeInnerHTML(button, `
+          <span class="__cg_nav_menu_label">
+            ${getAlarmIconSvg(STATE.alarmEnabled)}
+            <span>Alarma</span>
+          </span>
+          <span class="__cg_nav_menu_value">${STATE.alarmEnabled ? 'Activada' : 'Desactivada'}</span>
+        `);
+      } else {
+        setSafeInnerHTML(button, getAlarmIconSvg(STATE.alarmEnabled));
+      }
       button.classList.toggle('__cg_nav_primary', STATE.alarmEnabled);
       button.classList.toggle('__cg_nav_ghost', !STATE.alarmEnabled);
       button.setAttribute('aria-pressed', STATE.alarmEnabled ? 'true' : 'false');
       button.setAttribute('aria-label', STATE.alarmEnabled ? 'Alarma activada' : 'Alarma desactivada');
       button.title = STATE.alarmEnabled ? 'Alarma activada' : 'Alarma desactivada';
     });
+
+    refreshAlarmVolumeControls();
+  }
+
+  function clampAlarmVolume(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return ALARM_VOLUME_DEFAULT;
+    return Math.min(ALARM_VOLUME_MAX, Math.max(ALARM_VOLUME_MIN, numeric));
+  }
+
+  function getAlarmVolumePercent() {
+    return Math.round((STATE.alarmVolume / ALARM_VOLUME_MAX) * 100);
+  }
+
+  function refreshAlarmVolumeControls() {
+    const percent = getAlarmVolumePercent();
+    const controls = document.querySelectorAll('[data-role="__cg_nav_alarm_volume"]');
+    controls.forEach((input) => {
+      const value = Math.round(STATE.alarmVolume * 100);
+      input.value = String(value);
+      input.title = `Volumen: ${percent}%`;
+      input.setAttribute('aria-label', `Volumen de alarma: ${percent}%`);
+    });
+
+    const valueLabels = document.querySelectorAll('[data-role="__cg_nav_alarm_volume_value"]');
+    valueLabels.forEach((label) => {
+      label.textContent = `${percent}%`;
+    });
+  }
+
+  function setAlarmVolume(value) {
+    STATE.alarmVolume = clampAlarmVolume(value);
+
+    try {
+      localStorage.setItem(STORAGE_KEYS.alarmVolume, String(STATE.alarmVolume));
+    } catch (_) { }
+
+    refreshAlarmVolumeControls();
   }
 
 
@@ -770,7 +841,7 @@
 
     dry.gain.setValueAtTime(0.82, ctx.currentTime);
     wet.gain.setValueAtTime(0.26, ctx.currentTime);
-    master.gain.setValueAtTime(0.72, ctx.currentTime);
+    master.gain.setValueAtTime(STATE.alarmVolume, ctx.currentTime);
 
     highpass.type = 'highpass';
     highpass.frequency.setValueAtTime(180, ctx.currentTime);
@@ -847,7 +918,7 @@
     const output = makeAlarmOutputChain(ctx);
 
     // Campana sintética: Dmaj9 ascendente, ataque limpio y cola amplia.
-    // El mismo motivo se repite 4 veces para que no sea fácil de ignorar.
+    // El mismo motivo se repite según ALARM_CHIME_REPEAT_COUNT para que no sea fácil de ignorar.
     // No usa ni replica assets propietarios; sólo osciladores Web Audio.
     const motif = [
       { t: 0.00, f: 587.33, g: 0.080, d: 1.55 }, // D5
@@ -1355,6 +1426,78 @@
         color: var(--cg-nav-text-soft);
         font-variant-numeric: tabular-nums;
       }
+      #__cg_nav_options_menu {
+        all: initial;
+        position: absolute;
+        right: 0;
+        bottom: calc(100% + 8px);
+        width: 226px;
+        display: grid;
+        gap: 6px;
+        padding: 8px;
+        border: 1px solid var(--cg-nav-border);
+        border-radius: 14px;
+        background: var(--cg-nav-bg);
+        color: var(--cg-nav-text);
+        backdrop-filter: blur(12px);
+        box-shadow: var(--cg-nav-shadow);
+        font: 13px/1.2 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        box-sizing: border-box;
+        user-select: none;
+      }
+      #__cg_nav_options_menu,
+      #__cg_nav_options_menu * {
+        box-sizing: border-box;
+      }
+      #__cg_nav_options_menu button,
+      #__cg_nav_options_menu .__cg_nav_menu_volume {
+        width: 100%;
+        min-height: 34px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 7px 9px;
+        border: 1px solid var(--cg-nav-border);
+        border-radius: 10px;
+        background: var(--cg-nav-surface);
+        color: var(--cg-nav-text);
+        font: inherit;
+      }
+      #__cg_nav_options_menu button {
+        cursor: pointer;
+      }
+      #__cg_nav_options_menu button:hover {
+        background: var(--cg-nav-surface-2);
+      }
+      #__cg_nav_options_menu button.__cg_nav_primary {
+        background: var(--cg-nav-primary-soft);
+        border-color: rgba(64,92,245,.34);
+      }
+      .__cg_nav_menu_label {
+        min-width: 0;
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--cg-nav-text);
+      }
+      .__cg_nav_menu_label svg {
+        width: 17px;
+        height: 17px;
+        display: block;
+        flex: 0 0 auto;
+      }
+      .__cg_nav_menu_value {
+        color: var(--cg-nav-text-soft);
+        font-size: 12px;
+        white-space: nowrap;
+      }
+      .__cg_nav_menu_volume input {
+        width: 94px;
+        margin: 0;
+        accent-color: var(--cg-nav-primary);
+        cursor: pointer;
+      }
       #__cg_prev_btn,
       #__cg_next_btn {
         font-size: 18px;
@@ -1477,6 +1620,12 @@
         #__cg_nav_counter {
           min-width: 52px;
           padding: 0 6px;
+        }
+        #__cg_nav_options_menu {
+          width: 218px;
+        }
+        .__cg_nav_menu_volume input {
+          width: 84px;
         }
         #__cg_nav_modal_box {
           width: 96vw;
@@ -1611,7 +1760,6 @@
     handle.addEventListener('pointermove', onDragPointerMove);
     handle.addEventListener('pointerup', finishPanelDrag);
     handle.addEventListener('pointercancel', finishPanelDrag);
-    handle.addEventListener('dblclick', resetPanelPosition);
   }
 
 
@@ -1628,7 +1776,7 @@
 
     const dragHandle = document.createElement('div');
     dragHandle.id = '__cg_nav_drag';
-    dragHandle.title = 'Arrastra para mover. Doble click para restaurar la posición.';
+    dragHandle.title = 'Arrastra para mover.';
     setSafeInnerHTML(dragHandle, getDragIconSvg());
 
     const prevBtn = document.createElement('button');
@@ -1653,42 +1801,19 @@
     listBtn.id = '__cg_list_btn';
     listBtn.type = 'button';
     listBtn.className = '__cg_nav_primary';
-    listBtn.title = 'Abrir lista';
-    listBtn.setAttribute('aria-label', 'Abrir lista');
+    listBtn.title = 'Abrir menú';
+    listBtn.setAttribute('aria-label', 'Abrir menú');
     setSafeInnerHTML(listBtn, getListIconSvg());
-
-    const themeBtn = document.createElement('button');
-    themeBtn.type = 'button';
-    themeBtn.dataset.role = '__cg_nav_theme_toggle';
-    themeBtn.className = '__cg_nav_ghost';
-    themeBtn.addEventListener('click', cycleThemeMode);
-
-    const alarmBtn = document.createElement('button');
-    alarmBtn.type = 'button';
-    alarmBtn.dataset.role = '__cg_nav_alarm_toggle';
-    alarmBtn.className = STATE.alarmEnabled ? '__cg_nav_primary' : '__cg_nav_ghost';
-    alarmBtn.addEventListener('click', toggleAlarmEnabled);
-
-    const resetBtn = document.createElement('button');
-    resetBtn.type = 'button';
-    resetBtn.className = '__cg_nav_ghost';
-    resetBtn.title = 'Recentrar panel';
-    resetBtn.setAttribute('aria-label', 'Recentrar panel');
-    resetBtn.addEventListener('click', resetPanelPosition);
-    setSafeInnerHTML(resetBtn, getResetIconSvg());
 
     prevBtn.addEventListener('click', goPrev);
     nextBtn.addEventListener('click', goNext);
-    listBtn.addEventListener('click', openListModal);
+    listBtn.addEventListener('click', toggleOptionsMenu);
 
     panel.appendChild(dragHandle);
     panel.appendChild(prevBtn);
     panel.appendChild(counter);
     panel.appendChild(nextBtn);
     panel.appendChild(listBtn);
-    panel.appendChild(themeBtn);
-    panel.appendChild(alarmBtn);
-    panel.appendChild(resetBtn);
 
     (document.body || document.documentElement).appendChild(panel);
     STATE.panel = panel;
@@ -1719,7 +1844,124 @@
     refreshAlarmControls();
   }
 
+  function closeOptionsMenu() {
+    if (!STATE.optionsMenu) return;
+    STATE.optionsMenu.remove();
+    STATE.optionsMenu = null;
+    document.removeEventListener('click', handleOptionsMenuOutsideClick, true);
+    document.removeEventListener('keydown', handleOptionsMenuKeydown, true);
+  }
+
+  function handleOptionsMenuOutsideClick(event) {
+    if (!STATE.optionsMenu) return;
+    if (STATE.optionsMenu.contains(event.target)) return;
+    if (STATE.panel && STATE.panel.querySelector('#__cg_list_btn')?.contains(event.target)) return;
+    closeOptionsMenu();
+  }
+
+  function handleOptionsMenuKeydown(event) {
+    if (event.key === 'Escape') closeOptionsMenu();
+  }
+
+  function toggleOptionsMenu(event) {
+    if (event) event.stopPropagation();
+
+    if (STATE.optionsMenu) {
+      closeOptionsMenu();
+      return;
+    }
+
+    if (!STATE.panel) return;
+
+    const menu = document.createElement('div');
+    menu.id = '__cg_nav_options_menu';
+    menu.setAttribute('role', 'menu');
+    menu.addEventListener('click', (menuEvent) => menuEvent.stopPropagation());
+
+    const openListBtn = document.createElement('button');
+    openListBtn.type = 'button';
+    openListBtn.className = '__cg_nav_menu_row';
+    openListBtn.setAttribute('role', 'menuitem');
+    setSafeInnerHTML(openListBtn, `
+      <span class="__cg_nav_menu_label">
+        ${getListIconSvg()}
+        <span>Abrir lista</span>
+      </span>
+      <span class="__cg_nav_menu_value">↗</span>
+    `);
+    openListBtn.addEventListener('click', () => {
+      closeOptionsMenu();
+      openListModal();
+    });
+
+    const themeBtn = document.createElement('button');
+    themeBtn.type = 'button';
+    themeBtn.dataset.role = '__cg_nav_theme_toggle';
+    themeBtn.dataset.display = '__cg_nav_menu';
+    themeBtn.className = '__cg_nav_menu_row';
+    themeBtn.setAttribute('role', 'menuitem');
+    themeBtn.addEventListener('click', cycleThemeMode);
+
+    const alarmBtn = document.createElement('button');
+    alarmBtn.type = 'button';
+    alarmBtn.dataset.role = '__cg_nav_alarm_toggle';
+    alarmBtn.dataset.display = '__cg_nav_menu';
+    alarmBtn.className = STATE.alarmEnabled ? '__cg_nav_menu_row __cg_nav_primary' : '__cg_nav_menu_row';
+    alarmBtn.setAttribute('role', 'menuitem');
+    alarmBtn.addEventListener('click', toggleAlarmEnabled);
+
+    const volumeRow = document.createElement('div');
+    volumeRow.className = '__cg_nav_menu_volume';
+
+    const volumeLabel = document.createElement('span');
+    volumeLabel.className = '__cg_nav_menu_label';
+    volumeLabel.textContent = 'Volumen';
+
+    const volumeInput = document.createElement('input');
+    volumeInput.type = 'range';
+    volumeInput.min = String(Math.round(ALARM_VOLUME_MIN * 100));
+    volumeInput.max = String(Math.round(ALARM_VOLUME_MAX * 100));
+    volumeInput.step = '1';
+    volumeInput.value = String(Math.round(STATE.alarmVolume * 100));
+    volumeInput.dataset.role = '__cg_nav_alarm_volume';
+    volumeInput.addEventListener('input', () => {
+      setAlarmVolume(Number(volumeInput.value) / 100);
+    });
+
+    const volumeValue = document.createElement('span');
+    volumeValue.className = '__cg_nav_menu_value';
+    volumeValue.dataset.role = '__cg_nav_alarm_volume_value';
+    volumeValue.textContent = `${getAlarmVolumePercent()}%`;
+
+    const volumeControl = document.createElement('span');
+    volumeControl.className = '__cg_nav_menu_label';
+    volumeControl.appendChild(volumeInput);
+    volumeControl.appendChild(volumeValue);
+
+    volumeRow.appendChild(volumeLabel);
+    volumeRow.appendChild(volumeControl);
+
+    menu.appendChild(openListBtn);
+    menu.appendChild(themeBtn);
+    menu.appendChild(alarmBtn);
+    menu.appendChild(volumeRow);
+
+    STATE.panel.appendChild(menu);
+    STATE.optionsMenu = menu;
+
+    refreshThemeControls();
+    refreshAlarmControls();
+    refreshAlarmVolumeControls();
+
+    setTimeout(() => {
+      document.addEventListener('click', handleOptionsMenuOutsideClick, true);
+      document.addEventListener('keydown', handleOptionsMenuKeydown, true);
+    }, 0);
+  }
+
   function openListModal() {
+    closeOptionsMenu();
+
     if (STATE.listModal) {
       STATE.listModal.remove();
       STATE.listModal = null;
@@ -1746,17 +1988,11 @@
     const headerRight = document.createElement('div');
     headerRight.id = '__cg_nav_modal_header_right';
 
-    const themeBtn = document.createElement('button');
-    themeBtn.type = 'button';
-    themeBtn.dataset.role = '__cg_nav_theme_toggle';
-    themeBtn.addEventListener('click', cycleThemeMode);
-
     const closeBtn = document.createElement('button');
     closeBtn.id = '__cg_nav_close';
     closeBtn.type = 'button';
     closeBtn.textContent = 'Cerrar';
 
-    headerRight.appendChild(themeBtn);
     headerRight.appendChild(closeBtn);
 
     header.appendChild(headerLeft);
