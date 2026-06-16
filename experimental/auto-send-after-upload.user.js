@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         ChatGPT - Auto enviar cuando termine la subida
+// @name         ChatGPT - Auto enviar seguro + descargas aisladas
 // @namespace    local.chatgpt.auto-send-after-upload
-// @version      1.1.0
-// @description  Activa un envío automático único: espera a que desaparezca "File Upload Pending" y hace clic en Enviar cuando el botón queda habilitado. Incluye tema automático, oscuro y claro.
+// @version      1.2.0
+// @description  Autoenvío seguro cuando termina la subida. Aísla la lógica de descargas de archivos de la conversación en controles separados.
 // @match        https://chatgpt.com/*
 // @match        https://chat.openai.com/*
 // @grant        none
@@ -19,39 +19,18 @@
     return;
   }
 
-  let __asu_policy = null;
-  if (window.trustedTypes && window.trustedTypes.createPolicy) {
-    for (const name of [
-      "MyPromptPolicy",
-      "dompurify",
-      "default",
-      "cwm-policy",
-      "__asu_policy",
-    ]) {
-      try {
-        __asu_policy = window.trustedTypes.createPolicy(name, {
-          createHTML: (s) => s,
-        });
-        break;
-      } catch (_) {}
-    }
-  }
-
-  function setSafeInnerHTML(el, html) {
-    if (!el) return;
-    el.innerHTML = __asu_policy ? __asu_policy.createHTML(html) : html;
-  }
-
   const CONFIG = {
     panelId: "cgpt-auto-send-upload-panel",
     styleId: "cgpt-auto-send-upload-style",
     zIndex: 2147483647,
     checkEveryMs: 400,
-    debounceMs: 80,
+    debounceMs: 90,
+    version: "1.2.0",
   };
 
   const STORAGE_KEYS = {
     theme: "__cgpt_auto_send_upload_theme_v1",
+    minimized: "__cgpt_auto_send_upload_minimized_v1",
   };
 
   const THEME_ORDER = ["auto", "dark", "light"];
@@ -60,6 +39,7 @@
     dark: "Tema oscuro",
     light: "Tema claro",
   };
+
   const COLOR_SCHEME_QUERY = window.matchMedia
     ? window.matchMedia("(prefers-color-scheme: dark)")
     : null;
@@ -70,6 +50,10 @@
     /(file\s*upload\s*pending|upload\s*pending|subida\s+de\s+archivo\s+pendiente|archivo\s+pendiente|carga\s+de\s+archivo\s+pendiente|subiendo\s+archivo|uploading\s+file|processing\s+file|procesando\s+archivo)/i;
   const STOP_RE =
     /(^|\b)(stop|detener|cancelar|interrumpir|parar|stop\s+streaming)(\b|$)/i;
+  const FILE_EXT_RE =
+    /\.(?:user\.js|js|txt|md|pdf|docx|doc|xlsx|xls|pptx|ppt|csv|json|zip|rar|7z|png|jpe?g|webp|gif|svg|html|css|py|ipynb|xml|yaml|yml)(?:\b|$|[?#])/i;
+  const DOWNLOAD_HINT_RE =
+    /(download|sandbox|files|file|attachment|backend-api|blob:|usercontent)/i;
 
   const state = {
     armed: false,
@@ -79,12 +63,23 @@
     debounceTimer: null,
     themeMode: "auto",
     resolvedTheme: "dark",
+    downloads: [],
   };
 
   function normalizeText(text) {
     return String(text || "")
+      .replace(/\u00a0/g, " ")
       .replace(/\s+/g, " ")
       .trim();
+  }
+
+  function escapeHtml(text) {
+    return String(text || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
   }
 
   function isVisible(el) {
@@ -113,6 +108,11 @@
     );
   }
 
+  function getShortText(el) {
+    const text = normalizeText(el.textContent);
+    return text.length <= 36 ? text : "";
+  }
+
   function ariaDescribedText(el) {
     const ids = normalizeText(el.getAttribute("aria-describedby"))
       .split(" ")
@@ -130,12 +130,36 @@
         el.getAttribute("title"),
         el.getAttribute("data-testid"),
         el.getAttribute("data-state"),
-        el.textContent,
         ariaDescribedText(el),
+        getShortText(el),
       ]
         .filter(Boolean)
         .join(" "),
     );
+  }
+
+  function fullElementText(el) {
+    if (!el) return "";
+    return normalizeText(
+      [
+        el.getAttribute("download"),
+        el.getAttribute("aria-label"),
+        el.getAttribute("title"),
+        el.textContent,
+        el.getAttribute("href"),
+      ]
+        .filter(Boolean)
+        .join(" "),
+    );
+  }
+
+  function getInputValue(el) {
+    if (!el) return "";
+    if (el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement)
+      return el.value || "";
+    if (el.isContentEditable || el.getAttribute("role") === "textbox")
+      return el.innerText || el.textContent || "";
+    return "";
   }
 
   function findPromptInput() {
@@ -158,99 +182,184 @@
       ),
     ]
       .filter(isVisible)
-      .filter((el) => !el.closest('[aria-hidden="true"]'));
+      .filter((el) => !el.closest('[aria-hidden="true"]'))
+      .filter((el) => !el.closest("article, [data-message-author-role]"));
 
     candidates.sort((a, b) => {
       const ar = a.getBoundingClientRect();
       const br = b.getBoundingClientRect();
       let as = ar.bottom;
       let bs = br.bottom;
-      if ((a.id || "").toLowerCase() === "prompt-textarea") as += 500;
-      if ((b.id || "").toLowerCase() === "prompt-textarea") bs += 500;
+      if ((a.id || "").toLowerCase() === "prompt-textarea") as += 900;
+      if ((b.id || "").toLowerCase() === "prompt-textarea") bs += 900;
       if (
         (a.getAttribute("data-testid") || "").toLowerCase().includes("prompt")
       )
-        as += 200;
+        as += 300;
       if (
         (b.getAttribute("data-testid") || "").toLowerCase().includes("prompt")
       )
-        bs += 200;
+        bs += 300;
       return bs - as;
     });
 
     return candidates[0] || null;
   }
 
-  function looksLikeSendButton(el, label) {
-    const type = (el.getAttribute("type") || "").toLowerCase();
-    const testId = (el.getAttribute("data-testid") || "").toLowerCase();
+  function findComposerRoot(input) {
+    if (!input) return null;
+
+    const direct = input.closest(
+      'form, [data-testid="composer"], [data-testid*="composer"]',
+    );
+    if (direct && isVisible(direct)) return direct;
+
+    let node = input.parentElement;
+    for (
+      let depth = 0;
+      node && depth < 10;
+      depth += 1, node = node.parentElement
+    ) {
+      if (node.closest("article, [data-message-author-role]")) break;
+      const buttons = node.querySelectorAll("button");
+      if (
+        buttons.length &&
+        [...buttons].some((btn) => {
+          const testId = (btn.getAttribute("data-testid") || "").toLowerCase();
+          const type = (btn.getAttribute("type") || "").toLowerCase();
+          const label = elementLabel(btn);
+          return (
+            testId.includes("send") ||
+            type === "submit" ||
+            SEND_RE.test(label) ||
+            PENDING_RE.test(label)
+          );
+        })
+      ) {
+        return node;
+      }
+    }
+
+    return input.parentElement || null;
+  }
+
+  function isDownloadElement(el) {
+    if (!el) return false;
+    if (el.matches("a[href], a[download]")) return true;
+    if (el.closest("a[href], a[download]")) return true;
+    const text = fullElementText(el);
     return (
-      testId === "send-button" ||
-      testId.includes("send") ||
-      SEND_RE.test(label) ||
-      PENDING_RE.test(label) ||
-      (type === "submit" && !!el.closest("form"))
+      FILE_EXT_RE.test(text) ||
+      (DOWNLOAD_HINT_RE.test(text) &&
+        /\.(?:js|txt|pdf|docx|xlsx|pptx|zip|csv|json|md)\b/i.test(text))
     );
   }
 
-  function scoreSendButton(el, input) {
-    const label = elementLabel(el);
-    const rect = el.getBoundingClientRect();
-    const testId = (el.getAttribute("data-testid") || "").toLowerCase();
+  function isConversationArea(el) {
+    return !!el.closest("article, [data-message-author-role], main");
+  }
+
+  function looksLikeComposerSendButton(btn, composerRoot) {
+    if (!btn || btn.tagName !== "BUTTON") return false;
+    if (!composerRoot || !composerRoot.contains(btn)) return false;
+    if (btn.closest(`#${CONFIG.panelId}`)) return false;
+    if (btn.closest("article, [data-message-author-role]")) return false;
+    if (isDownloadElement(btn)) return false;
+
+    const testId = (btn.getAttribute("data-testid") || "").toLowerCase();
+    const type = (btn.getAttribute("type") || "").toLowerCase();
+    const aria = normalizeText(
+      [
+        btn.getAttribute("aria-label"),
+        btn.getAttribute("title"),
+        btn.getAttribute("data-testid"),
+        btn.getAttribute("data-state"),
+        ariaDescribedText(btn),
+      ]
+        .filter(Boolean)
+        .join(" "),
+    );
+
+    if (STOP_RE.test(aria)) return false;
+    if (testId === "send-button") return true;
+    if (testId.includes("send-button")) return true;
+    if (testId.includes("composer-submit")) return true;
+    if (type === "submit") return true;
+    if (PENDING_RE.test(aria)) return true;
+    if (SEND_RE.test(aria)) return true;
+
+    return false;
+  }
+
+  function scoreComposerSendButton(btn, input, composerRoot) {
+    const rect = btn.getBoundingClientRect();
+    const testId = (btn.getAttribute("data-testid") || "").toLowerCase();
+    const type = (btn.getAttribute("type") || "").toLowerCase();
+    const label = elementLabel(btn);
     let score = 0;
 
-    if (testId === "send-button") score += 1000;
-    if (testId.includes("send")) score += 300;
-    if (SEND_RE.test(label)) score += 200;
-    if (PENDING_RE.test(label)) score += 200;
-    if ((el.getAttribute("type") || "").toLowerCase() === "submit")
-      score += 120;
+    if (testId === "send-button") score += 2000;
+    if (testId.includes("send-button")) score += 1500;
+    if (testId.includes("composer-submit")) score += 1000;
+    if (type === "submit") score += 700;
+    if (PENDING_RE.test(label)) score += 450;
+    if (SEND_RE.test(label)) score += 350;
     if (
       input &&
-      el.closest("form") &&
-      input.closest("form") === el.closest("form")
+      btn.closest("form") &&
+      input.closest("form") === btn.closest("form")
     )
-      score += 500;
-    if (rect.bottom > window.innerHeight * 0.45) score += 80;
-    score += Math.round(rect.bottom / 10);
-
-    if (STOP_RE.test(label)) score -= 1000;
-    if (el.closest("header, nav, aside")) score -= 150;
-
+      score += 600;
+    if (composerRoot && composerRoot.contains(btn)) score += 500;
+    if (rect.right > window.innerWidth * 0.5) score += 60;
+    if (rect.bottom > window.innerHeight * 0.45) score += 60;
+    if (STOP_RE.test(label)) score -= 2000;
+    if (isDownloadElement(btn)) score -= 5000;
     return score;
   }
 
   function findSendButton() {
     const input = findPromptInput();
-    const allButtons = [...document.querySelectorAll('button, [role="button"]')]
+    if (!input) return null;
+
+    const composerRoot = findComposerRoot(input);
+    if (!composerRoot) return null;
+
+    const buttons = [...composerRoot.querySelectorAll("button")]
       .filter(isVisible)
-      .filter((el) => !el.closest(`#${CONFIG.panelId}`));
+      .filter((btn) => looksLikeComposerSendButton(btn, composerRoot));
 
-    const candidates = allButtons
-      .map((el) => ({ el, label: elementLabel(el) }))
-      .filter(({ el, label }) => looksLikeSendButton(el, label));
+    if (!buttons.length) return null;
 
-    if (!candidates.length) return null;
-
-    candidates.sort(
-      (a, b) => scoreSendButton(b.el, input) - scoreSendButton(a.el, input),
+    buttons.sort(
+      (a, b) =>
+        scoreComposerSendButton(b, input, composerRoot) -
+        scoreComposerSendButton(a, input, composerRoot),
     );
-    return candidates[0].el;
+    return buttons[0] || null;
   }
 
   function getReadiness() {
-    const btn = findSendButton();
+    const input = findPromptInput();
+    if (!input) {
+      return {
+        ready: false,
+        button: null,
+        message: "Esperando: no encontré el cuadro de texto del compositor.",
+      };
+    }
 
+    const btn = findSendButton();
     if (!btn) {
       return {
         ready: false,
         button: null,
-        message: "Esperando: no encontré el botón de envío de ChatGPT.",
+        message:
+          "Esperando: no encontré un botón de envío dentro del compositor.",
       };
     }
 
     const label = elementLabel(btn);
-
     if (PENDING_RE.test(label)) {
       return {
         ready: false,
@@ -268,6 +377,21 @@
       };
     }
 
+    if (
+      isDownloadElement(btn) ||
+      (isConversationArea(btn) &&
+        !btn.closest(
+          'form, [data-testid="composer"], [data-testid*="composer"]',
+        ))
+    ) {
+      return {
+        ready: false,
+        button: null,
+        message:
+          "Bloqueado: el candidato detectado no pertenece al compositor.",
+      };
+    }
+
     if (isDisabled(btn)) {
       return {
         ready: false,
@@ -280,7 +404,7 @@
     return {
       ready: true,
       button: btn,
-      message: "Listo: el botón de envío está habilitado.",
+      message: "Listo: el botón de envío del compositor está habilitado.",
     };
   }
 
@@ -291,36 +415,20 @@
   }
 
   function loadUiPreferences() {
-    const storedTheme = localStorage.getItem(STORAGE_KEYS.theme);
-    if (THEME_ORDER.includes(storedTheme)) {
-      state.themeMode = storedTheme;
-    }
+    try {
+      const storedTheme = localStorage.getItem(STORAGE_KEYS.theme);
+      if (THEME_ORDER.includes(storedTheme)) state.themeMode = storedTheme;
+    } catch (_) {}
   }
 
   function getThemeIconSvg(mode) {
     if (mode === "dark") {
-      return `
-        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-          <path d="M20 15.31A8 8 0 0 1 8.69 4 9 9 0 1 0 20 15.31z" fill="currentColor"></path>
-        </svg>
-      `;
+      return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 15.31A8 8 0 0 1 8.69 4 9 9 0 1 0 20 15.31z" fill="currentColor"></path></svg>';
     }
-
     if (mode === "light") {
-      return `
-        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-          <circle cx="12" cy="12" r="4" fill="currentColor"></circle>
-          <path d="M12 2v3M12 19v3M4.93 4.93l2.12 2.12M16.95 16.95l2.12 2.12M2 12h3M19 12h3M4.93 19.07l2.12-2.12M16.95 7.05l2.12-2.12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"></path>
-        </svg>
-      `;
+      return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4" fill="currentColor"></circle><path d="M12 2v3M12 19v3M4.93 4.93l2.12 2.12M16.95 16.95l2.12 2.12M2 12h3M19 12h3M4.93 19.07l2.12-2.12M16.95 7.05l2.12-2.12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"></path></svg>';
     }
-
-    return `
-      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-        <rect x="3" y="5" width="18" height="12" rx="2.5" ry="2.5" stroke="currentColor" stroke-width="1.8" fill="none"></rect>
-        <path d="M8 20h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"></path>
-      </svg>
-    `;
+    return '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="3" y="5" width="18" height="12" rx="2.5" ry="2.5" stroke="currentColor" stroke-width="1.8" fill="none"></rect><path d="M8 20h8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"></path></svg>';
   }
 
   function refreshThemeControls() {
@@ -335,10 +443,7 @@
       const label = THEME_LABELS[state.themeMode] || "Tema";
       themeBtn.setAttribute("aria-label", `${label}. Clic para cambiar tema.`);
       themeBtn.setAttribute("title", `${label}. Clic: auto → oscuro → claro.`);
-      setSafeInnerHTML(
-        themeBtn,
-        `${getThemeIconSvg(state.themeMode)}<span class="asu-sr">${label}</span>`,
-      );
+      themeBtn.innerHTML = `${getThemeIconSvg(state.themeMode)}<span class="asu-sr">${escapeHtml(label)}</span>`;
     }
   }
 
@@ -359,11 +464,9 @@
     const currentIndex = THEME_ORDER.indexOf(state.themeMode);
     const nextIndex = (currentIndex + 1) % THEME_ORDER.length;
     state.themeMode = THEME_ORDER[nextIndex];
-
     try {
       localStorage.setItem(STORAGE_KEYS.theme, state.themeMode);
     } catch (_) {}
-
     applyTheme();
   }
 
@@ -379,7 +482,6 @@
     if (!panel) return;
     const armBtn = panel.querySelector(".asu-arm");
     const cancelBtn = panel.querySelector(".asu-cancel");
-
     if (armBtn) {
       armBtn.textContent = state.armed
         ? "Armado: enviará al estar listo"
@@ -387,10 +489,7 @@
       armBtn.classList.toggle("is-armed", state.armed);
       armBtn.disabled = state.armed;
     }
-
-    if (cancelBtn) {
-      cancelBtn.disabled = !state.armed;
-    }
+    if (cancelBtn) cancelBtn.disabled = !state.armed;
   }
 
   function stopWatching() {
@@ -416,7 +515,6 @@
 
   function clickSendOnce() {
     const fresh = getReadiness();
-
     if (!fresh.ready || !fresh.button) {
       state.sent = false;
       setStatus(fresh.message);
@@ -424,7 +522,7 @@
     }
 
     state.sent = true;
-    setStatus("Enviando solicitud...");
+    setStatus("Enviando solicitud desde el compositor...");
 
     try {
       fresh.button.scrollIntoView({ block: "nearest", inline: "nearest" });
@@ -440,18 +538,13 @@
 
   function checkAutoSend() {
     if (!state.armed || state.sent) return;
-
     const readiness = getReadiness();
     setStatus(readiness.message);
-
-    if (readiness.ready) {
-      setTimeout(clickSendOnce, 120);
-    }
+    if (readiness.ready) setTimeout(clickSendOnce, 120);
   }
 
   function startWatching() {
     stopWatching();
-
     if (!document.body) return;
 
     state.observer = new MutationObserver(scheduleCheck);
@@ -468,6 +561,8 @@
         "data-testid",
         "data-state",
         "class",
+        "href",
+        "download",
       ],
     });
 
@@ -480,7 +575,7 @@
     state.sent = false;
     updateButtons();
     setStatus(
-      "Auto envío armado. Esperando a que termine la subida y se habilite Enviar...",
+      "Auto envío armado. Solo se aceptará el botón de envío dentro del compositor.",
     );
     startWatching();
   }
@@ -491,6 +586,161 @@
     stopWatching();
     updateButtons();
     setStatus("Auto envío cancelado.");
+  }
+
+  function nameFromUrl(url) {
+    try {
+      const clean = String(url || "")
+        .split("#")[0]
+        .split("?")[0];
+      const last = decodeURIComponent(clean.split("/").pop() || "");
+      return last || "";
+    } catch (_) {
+      return "";
+    }
+  }
+
+  function extractDownloadName(el) {
+    const direct = normalizeText(el.getAttribute("download"));
+    if (direct && FILE_EXT_RE.test(direct)) return direct;
+
+    const text = normalizeText(
+      el.textContent ||
+        el.getAttribute("aria-label") ||
+        el.getAttribute("title") ||
+        "",
+    );
+    const textMatch = text.match(
+      /[^\s/\\]+\.(?:user\.js|js|txt|md|pdf|docx|doc|xlsx|xls|pptx|ppt|csv|json|zip|rar|7z|png|jpe?g|webp|gif|svg|html|css|py|ipynb|xml|yaml|yml)\b/i,
+    );
+    if (textMatch) return textMatch[0];
+
+    const href =
+      el.getAttribute("href") ||
+      el.closest("a[href]")?.getAttribute("href") ||
+      "";
+    const fromUrl = nameFromUrl(href);
+    if (fromUrl && FILE_EXT_RE.test(fromUrl)) return fromUrl;
+
+    return text || fromUrl || "archivo descargable";
+  }
+
+  function findDownloadableArtifacts() {
+    const roots = [...document.querySelectorAll('main, [role="main"]')];
+    const root = roots[0] || document.body;
+
+    const raw = [
+      ...root.querySelectorAll('a[href], a[download], button, [role="button"]'),
+    ]
+      .filter((el) => !el.closest(`#${CONFIG.panelId}`))
+      .filter(
+        (el) =>
+          !el.closest(
+            'form, [data-testid="composer"], [data-testid*="composer"]',
+          ),
+      )
+      .filter(isVisible);
+
+    const results = [];
+    const seen = new Set();
+
+    raw.forEach((el) => {
+      const link = el.matches("a[href], a[download]")
+        ? el
+        : el.closest("a[href], a[download]") || el;
+      const text = fullElementText(link);
+      const href = link.getAttribute("href") || "";
+      const likely =
+        link.matches("a[download]") ||
+        FILE_EXT_RE.test(text) ||
+        (href && DOWNLOAD_HINT_RE.test(href) && !href.startsWith("#"));
+
+      if (!likely) return;
+
+      const key = `${href}|${normalizeText(link.textContent)}|${link.getAttribute("download") || ""}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+
+      const rect = link.getBoundingClientRect();
+      results.push({
+        el: link,
+        name: extractDownloadName(link),
+        href,
+        top: rect.top + window.scrollY,
+        left: rect.left + window.scrollX,
+      });
+    });
+
+    results.sort((a, b) => a.top - b.top || a.left - b.left);
+    return results;
+  }
+
+  function clickDownloadItem(item) {
+    if (!item || !item.el) {
+      setStatus("No hay archivo descargable seleccionado.");
+      return false;
+    }
+    try {
+      item.el.scrollIntoView({ block: "center", inline: "nearest" });
+    } catch (_) {}
+    item.el.click();
+    setStatus(`Descarga activada: ${item.name}`);
+    return true;
+  }
+
+  function downloadLatestArtifact() {
+    const items = findDownloadableArtifacts();
+    state.downloads = items;
+    renderDownloadList();
+    if (!items.length) {
+      setStatus(
+        "No encontré enlaces descargables visibles en la conversación.",
+      );
+      return;
+    }
+    clickDownloadItem(items[items.length - 1]);
+  }
+
+  function scanDownloads() {
+    state.downloads = findDownloadableArtifacts();
+    renderDownloadList();
+    setStatus(
+      state.downloads.length
+        ? `Encontré ${state.downloads.length} archivo(s) descargable(s) visible(s).`
+        : "No encontré enlaces descargables visibles. Si están más arriba, desplázate y vuelve a escanear.",
+    );
+  }
+
+  function renderDownloadList() {
+    const panel = document.getElementById(CONFIG.panelId);
+    if (!panel) return;
+    const box = panel.querySelector(".asu-download-list");
+    if (!box) return;
+
+    box.textContent = "";
+
+    if (!state.downloads.length) {
+      const empty = document.createElement("div");
+      empty.className = "asu-download-empty";
+      empty.textContent = "Sin archivos detectados en el DOM visible.";
+      box.appendChild(empty);
+      return;
+    }
+
+    state.downloads.slice(-12).forEach((item, localIndex) => {
+      const absoluteIndex =
+        Math.max(0, state.downloads.length - 12) + localIndex;
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "asu-download-row";
+      row.dataset.index = String(absoluteIndex);
+      row.title = item.href || item.name;
+      row.textContent = item.name;
+      row.addEventListener("click", () =>
+        clickDownloadItem(state.downloads[absoluteIndex]),
+      );
+      box.appendChild(row);
+    });
   }
 
   function ensureStyle() {
@@ -512,6 +762,7 @@
         --asu-text-muted: #94a3b8;
         --asu-primary: #60a5fa;
         --asu-primary-soft: rgba(96, 165, 250, 0.15);
+        --asu-danger: #fca5a5;
         --asu-shadow: 0 18px 38px rgba(0, 0, 0, 0.34);
       }
 
@@ -528,6 +779,7 @@
         --asu-text-muted: #64748b;
         --asu-primary: #2563eb;
         --asu-primary-soft: rgba(37, 99, 235, 0.1);
+        --asu-danger: #b91c1c;
         --asu-shadow: 0 18px 38px rgba(15, 23, 42, 0.16);
       }
 
@@ -535,7 +787,7 @@
         position: fixed;
         left: 18px;
         bottom: 18px;
-        width: 352px;
+        width: 376px;
         max-width: calc(100vw - 36px);
         background: var(--asu-bg);
         color: var(--asu-text);
@@ -546,13 +798,12 @@
         overflow: hidden;
         backdrop-filter: blur(18px);
         -webkit-backdrop-filter: blur(18px);
-        font: 13px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font: 13px/1.35 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       }
 
-      #${CONFIG.panelId},
-      #${CONFIG.panelId} * {
-        box-sizing: border-box;
-      }
+      #${CONFIG.panelId}, #${CONFIG.panelId} * { box-sizing: border-box; }
+
+      #${CONFIG.panelId}.is-minimized .asu-body { display: none; }
 
       #${CONFIG.panelId} .asu-head {
         display: flex;
@@ -574,7 +825,7 @@
       #${CONFIG.panelId} .asu-title {
         color: var(--asu-text);
         font-size: 13px;
-        font-weight: 750;
+        font-weight: 760;
         letter-spacing: -0.01em;
         white-space: nowrap;
         overflow: hidden;
@@ -584,94 +835,143 @@
       #${CONFIG.panelId} .asu-subtitle {
         color: var(--asu-text-muted);
         font-size: 11px;
-        font-weight: 500;
         white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
 
-      #${CONFIG.panelId} .asu-theme {
-        width: 34px;
-        height: 34px;
-        min-width: 34px;
-        padding: 0;
-        display: inline-flex;
+      #${CONFIG.panelId} .asu-head-actions {
+        display: flex;
         align-items: center;
-        justify-content: center;
-        border-radius: 12px;
+        gap: 6px;
+        flex: 0 0 auto;
+      }
+
+      #${CONFIG.panelId} .asu-icon-btn {
+        width: 31px;
+        height: 31px;
+        display: inline-grid;
+        place-items: center;
+        appearance: none;
         border: 1px solid var(--asu-border);
+        border-radius: 11px;
         background: var(--asu-surface);
         color: var(--asu-text-soft);
         cursor: pointer;
       }
 
-      #${CONFIG.panelId} .asu-theme:hover {
+      #${CONFIG.panelId} .asu-icon-btn:hover {
         background: var(--asu-surface-2);
         color: var(--asu-text);
       }
 
-      #${CONFIG.panelId} .asu-theme svg {
-        width: 19px;
-        height: 19px;
-        display: block;
-        pointer-events: none;
+      #${CONFIG.panelId} .asu-icon-btn svg {
+        width: 17px;
+        height: 17px;
       }
 
       #${CONFIG.panelId} .asu-body {
         padding: 12px;
+        display: grid;
+        gap: 10px;
       }
 
       #${CONFIG.panelId} .asu-status {
-        min-height: 44px;
-        margin-bottom: 10px;
+        min-height: 38px;
         padding: 10px 11px;
-        border: 1px solid var(--asu-border);
         border-radius: 13px;
+        border: 1px solid var(--asu-border);
         background: var(--asu-surface-3);
         color: var(--asu-text-soft);
         font-size: 12px;
-        line-height: 1.38;
+        white-space: pre-wrap;
       }
 
       #${CONFIG.panelId} .asu-actions {
-        display: flex;
+        display: grid;
+        grid-template-columns: 1fr 0.72fr;
+        gap: 8px;
+      }
+
+      #${CONFIG.panelId} .asu-download-actions {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
         gap: 8px;
       }
 
       #${CONFIG.panelId} .asu-btn {
         appearance: none;
         border: 1px solid var(--asu-border);
+        border-radius: 12px;
         background: var(--asu-surface);
         color: var(--asu-text);
-        border-radius: 12px;
-        padding: 8px 10px;
-        min-height: 34px;
-        cursor: pointer;
-        font: inherit;
+        padding: 9px 10px;
+        font-size: 12.5px;
         font-weight: 650;
-        letter-spacing: -0.005em;
+        cursor: pointer;
       }
 
       #${CONFIG.panelId} .asu-btn:hover:not(:disabled) {
         background: var(--asu-surface-2);
+        border-color: var(--asu-border-strong);
       }
 
       #${CONFIG.panelId} .asu-btn:disabled {
-        opacity: .55;
         cursor: not-allowed;
-      }
-
-      #${CONFIG.panelId} .asu-arm {
-        flex: 1;
+        opacity: 0.55;
       }
 
       #${CONFIG.panelId} .asu-arm.is-armed {
-        border-color: var(--asu-border-strong);
         background: var(--asu-primary-soft);
+        border-color: var(--asu-border-strong);
+        color: var(--asu-primary);
+      }
+
+      #${CONFIG.panelId} .asu-divider {
+        height: 1px;
+        background: var(--asu-border);
+        margin: 2px 0;
+      }
+
+      #${CONFIG.panelId} .asu-download-list {
+        max-height: 176px;
+        overflow: auto;
+        display: grid;
+        gap: 6px;
+      }
+
+      #${CONFIG.panelId} .asu-download-row {
+        width: 100%;
+        text-align: left;
+        appearance: none;
+        border: 1px solid var(--asu-border);
+        border-radius: 11px;
+        background: var(--asu-surface-3);
+        color: var(--asu-text-soft);
+        padding: 8px 9px;
+        cursor: pointer;
+        font-size: 12px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      #${CONFIG.panelId} .asu-download-row:hover {
+        border-color: var(--asu-border-strong);
         color: var(--asu-text);
       }
 
-      #${CONFIG.panelId} .asu-cancel {
-        min-width: 82px;
-        color: var(--asu-text-soft);
+      #${CONFIG.panelId} .asu-download-empty {
+        color: var(--asu-text-muted);
+        border: 1px dashed var(--asu-border);
+        border-radius: 11px;
+        padding: 9px;
+        font-size: 12px;
+      }
+
+      #${CONFIG.panelId} .asu-note {
+        color: var(--asu-text-muted);
+        font-size: 11.5px;
       }
 
       #${CONFIG.panelId} .asu-sr {
@@ -689,10 +989,9 @@
       @media (max-width: 640px) {
         #${CONFIG.panelId} {
           left: 8px;
-          right: 8px;
           bottom: 8px;
-          width: auto;
-          max-width: none;
+          width: calc(100vw - 16px);
+          max-width: calc(100vw - 16px);
         }
       }
     `;
@@ -700,75 +999,97 @@
   }
 
   function ensurePanel() {
-    if (document.getElementById(CONFIG.panelId)) return;
-    if (!document.body) return;
+    let panel = document.getElementById(CONFIG.panelId);
+    if (panel) return panel;
 
     ensureStyle();
 
-    const panel = document.createElement("div");
+    panel = document.createElement("div");
     panel.id = CONFIG.panelId;
-    setSafeInnerHTML(
-      panel,
-      `
+    panel.innerHTML = `
       <div class="asu-head">
         <div class="asu-title-wrap">
-          <div class="asu-title">ChatGPT · Auto envío tras subir archivos</div>
-          <div class="asu-subtitle">Espera File Upload Pending y envía una sola vez</div>
+          <div class="asu-title">Auto enviar seguro</div>
+          <div class="asu-subtitle">Envío y descargas aislados · v${escapeHtml(CONFIG.version)}</div>
         </div>
-        <button class="asu-theme" type="button"></button>
+        <div class="asu-head-actions">
+          <button class="asu-icon-btn asu-theme" type="button" aria-label="Tema"></button>
+          <button class="asu-icon-btn asu-min" type="button" aria-label="Minimizar" title="Minimizar">−</button>
+        </div>
       </div>
       <div class="asu-body">
-        <div class="asu-status">Desactivado. Sube archivos, escribe tu prompt y pulsa “Auto enviar al estar listo”.</div>
+        <div class="asu-status">Listo. El autoenvío solo buscará botones dentro del compositor.</div>
         <div class="asu-actions">
           <button class="asu-btn asu-arm" type="button">Auto enviar al estar listo</button>
           <button class="asu-btn asu-cancel" type="button" disabled>Cancelar</button>
         </div>
+        <div class="asu-divider"></div>
+        <div class="asu-download-actions">
+          <button class="asu-btn asu-scan" type="button">Listar archivos</button>
+          <button class="asu-btn asu-download-last" type="button">Descargar último</button>
+        </div>
+        <div class="asu-download-list">
+          <div class="asu-download-empty">Pulsa “Listar archivos”.</div>
+        </div>
+        <div class="asu-note">Las descargas se detectan solo en mensajes visibles/cargados en el DOM. Para archivos antiguos, desplázate hasta esa zona y vuelve a listar.</div>
       </div>
-    `,
-    );
+    `;
 
     document.body.appendChild(panel);
 
-    panel.querySelector(".asu-arm").addEventListener("click", armAutoSend);
+    try {
+      if (localStorage.getItem(STORAGE_KEYS.minimized) === "1") {
+        panel.classList.add("is-minimized");
+        panel.querySelector(".asu-min").textContent = "+";
+      }
+    } catch (_) {}
+
+    panel
+      .querySelector(".asu-theme")
+      ?.addEventListener("click", cycleThemeMode);
+    panel.querySelector(".asu-min")?.addEventListener("click", () => {
+      panel.classList.toggle("is-minimized");
+      const minimized = panel.classList.contains("is-minimized");
+      panel.querySelector(".asu-min").textContent = minimized ? "+" : "−";
+      try {
+        localStorage.setItem(STORAGE_KEYS.minimized, minimized ? "1" : "0");
+      } catch (_) {}
+    });
+    panel.querySelector(".asu-arm")?.addEventListener("click", armAutoSend);
     panel
       .querySelector(".asu-cancel")
-      .addEventListener("click", cancelAutoSend);
-    panel.querySelector(".asu-theme").addEventListener("click", cycleThemeMode);
+      ?.addEventListener("click", cancelAutoSend);
+    panel.querySelector(".asu-scan")?.addEventListener("click", scanDownloads);
+    panel
+      .querySelector(".asu-download-last")
+      ?.addEventListener("click", downloadLatestArtifact);
 
-    applyTheme();
+    refreshThemeControls();
     updateButtons();
+    renderDownloadList();
+    return panel;
   }
 
   function boot() {
     loadUiPreferences();
     applyTheme();
-    ensurePanel();
-
-    const panelKeeper = setInterval(ensurePanel, 1000);
 
     if (COLOR_SCHEME_QUERY) {
-      const handler = () => {
+      const onSchemeChange = () => {
         if (state.themeMode === "auto") applyTheme();
       };
-
-      try {
-        COLOR_SCHEME_QUERY.addEventListener("change", handler);
-      } catch (_) {
-        try {
-          COLOR_SCHEME_QUERY.addListener(handler);
-        } catch (_) {}
-      }
+      if (COLOR_SCHEME_QUERY.addEventListener)
+        COLOR_SCHEME_QUERY.addEventListener("change", onSchemeChange);
+      else if (COLOR_SCHEME_QUERY.addListener)
+        COLOR_SCHEME_QUERY.addListener(onSchemeChange);
     }
 
-    window.addEventListener("beforeunload", () => {
-      clearInterval(panelKeeper);
-      stopWatching();
-    });
+    const timer = setInterval(() => {
+      if (!document.body) return;
+      ensurePanel();
+      clearInterval(timer);
+    }, 200);
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", boot, { once: true });
-  } else {
-    boot();
-  }
+  boot();
 })();
