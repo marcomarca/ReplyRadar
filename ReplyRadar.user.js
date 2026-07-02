@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ReplyRadar
 // @namespace    https://github.com/marcomarca/ReplyRadar
-// @version      1.5.0
+// @version      1.5.1
 // @description  Navegador flotante de conversaciones con menú superior, alarma, autoenvío seguro al estar listo y control de volumen para ChatGPT y Gemini.
 // @author       marcomarca
 // @homepageURL  https://github.com/marcomarca/ReplyRadar
@@ -18,7 +18,7 @@
 // ==/UserScript==
 
 (function () {
-  "use strict";
+  'use strict';
 
   try {
     if (window.top !== window.self) return;
@@ -28,19 +28,13 @@
 
   let __cg_nav_policy = null;
   if (window.trustedTypes && window.trustedTypes.createPolicy) {
-    for (const name of [
-      "MyPromptPolicy",
-      "dompurify",
-      "default",
-      "cwm-policy",
-      "__cg_nav_policy",
-    ]) {
+    for (const name of ['MyPromptPolicy', 'dompurify', 'default', 'cwm-policy', '__cg_nav_policy']) {
       try {
         __cg_nav_policy = window.trustedTypes.createPolicy(name, {
           createHTML: (s) => s,
         });
         break;
-      } catch (_) {}
+      } catch (_) { }
     }
   }
 
@@ -53,10 +47,11 @@
   if (!PLATFORM) return;
 
   const STORAGE_KEYS = {
-    position: "__cg_nav_position_v1",
-    theme: "__cg_nav_theme_v1",
-    alarmEnabled: "__cg_nav_alarm_enabled_v1",
-    alarmVolume: "__cg_nav_alarm_volume_v1",
+    position: '__cg_nav_position_v1',
+    theme: '__cg_nav_theme_v1',
+    alarmEnabled: '__cg_nav_alarm_enabled_v1',
+    alarmVolume: '__cg_nav_alarm_volume_v1',
+    alarmTone: '__cg_nav_alarm_tone_v1',
   };
 
   const ALARM_COOLDOWN_MS = 13500;
@@ -64,35 +59,264 @@
   const ALARM_CHIME_REPEAT_INTERVAL_SEC = 2.75;
   const ALARM_VOLUME_DEFAULT = 0.72;
   const ALARM_VOLUME_MIN = 0;
+
   const ALARM_VOLUME_MAX = 1.35;
-  const CHATGPT_LAT_COMPLETION_URL = "https://chatgpt.com/backend-api/lat/r";
+  const ALARM_TONE_DEFAULT_ID = 'apple-inspired-chime';
+  const ALARM_TONES = [
+    {
+      id: 'apple-inspired-chime',
+      name: 'Apple Inspired Chime',
+      shortName: 'Apple',
+      label: 'Actual · campana amplia',
+      kind: 'apple',
+    },
+    {
+      id: 'soft-digital-ping',
+      name: 'Soft Digital Ping',
+      shortName: 'Soft Ping',
+      label: 'Moderna · limpia',
+      waveform: 'sine',
+      attack: 0.012,
+      hold: 0.025,
+      highpass: 180,
+      lowpass: 5600,
+      reverb: 0.10,
+      reverbDuration: 1.00,
+      reverbDecay: 3.4,
+      delay: 0.035,
+      delayFeedback: 0.10,
+      delayGain: 0.11,
+      partialGain: 0.18,
+      notes: [
+        { t: 0.00, f: 660.00, g: 0.080, d: 0.48 },
+        { t: 0.18, f: 880.00, g: 0.065, d: 0.58 },
+      ],
+    },
+    {
+      id: 'glass-tap',
+      name: 'Glass Tap',
+      shortName: 'Glass Tap',
+      label: 'Premium · brillante',
+      waveform: 'sine',
+      attack: 0.006,
+      hold: 0.018,
+      highpass: 420,
+      lowpass: 7800,
+      reverb: 0.18,
+      reverbDuration: 1.25,
+      reverbDecay: 3.6,
+      delay: 0.060,
+      delayFeedback: 0.10,
+      delayGain: 0.13,
+      partialGain: 0.14,
+      notes: [
+        { t: 0.00, f: 1046.50, g: 0.055, d: 0.48 },
+        { t: 0.11, f: 1318.51, g: 0.046, d: 0.42 },
+        { t: 0.23, f: 1567.98, g: 0.036, d: 0.38 },
+      ],
+    },
+    {
+      id: 'warm-marimba',
+      name: 'Warm Marimba',
+      shortName: 'Marimba',
+      label: 'Cómoda · orgánica',
+      waveform: 'triangle',
+      attack: 0.008,
+      hold: 0.018,
+      highpass: 120,
+      lowpass: 4200,
+      reverb: 0.08,
+      reverbDuration: 0.90,
+      reverbDecay: 3.8,
+      delay: 0.020,
+      delayFeedback: 0.08,
+      delayGain: 0.08,
+      partialGain: 0.08,
+      notes: [
+        { t: 0.00, f: 523.25, g: 0.090, d: 0.30 },
+        { t: 0.15, f: 659.25, g: 0.076, d: 0.28 },
+        { t: 0.30, f: 783.99, g: 0.060, d: 0.26 },
+      ],
+    },
+    {
+      id: 'minimal-pop',
+      name: 'Minimal Pop',
+      shortName: 'Minimal',
+      label: 'Simple · rápida',
+      waveform: 'triangle',
+      attack: 0.004,
+      hold: 0.010,
+      highpass: 160,
+      lowpass: 4800,
+      reverb: 0.03,
+      reverbDuration: 0.70,
+      reverbDecay: 4.0,
+      delay: 0.000,
+      partialGain: 0.05,
+      notes: [
+        { t: 0.00, f: 440.00, g: 0.070, d: 0.16 },
+        { t: 0.09, f: 880.00, g: 0.052, d: 0.24 },
+      ],
+    },
+    {
+      id: 'calm-bell',
+      name: 'Calm Bell',
+      shortName: 'Calm Bell',
+      label: 'Tranquila · clara',
+      waveform: 'sine',
+      attack: 0.018,
+      hold: 0.030,
+      highpass: 140,
+      lowpass: 5000,
+      reverb: 0.22,
+      reverbDuration: 1.50,
+      reverbDecay: 3.2,
+      delay: 0.080,
+      delayFeedback: 0.12,
+      delayGain: 0.14,
+      partialGain: 0.18,
+      notes: [
+        { t: 0.00, f: 587.33, g: 0.070, d: 0.95 },
+        { t: 0.22, f: 739.99, g: 0.050, d: 1.05 },
+      ],
+    },
+    {
+      id: 'lofi-pluck',
+      name: 'Lo-fi Pluck',
+      shortName: 'Lo-fi',
+      label: 'Cool · apagada',
+      waveform: 'triangle',
+      attack: 0.010,
+      hold: 0.015,
+      highpass: 90,
+      lowpass: 2800,
+      reverb: 0.12,
+      reverbDuration: 1.10,
+      reverbDecay: 3.9,
+      delay: 0.090,
+      delayFeedback: 0.15,
+      delayGain: 0.13,
+      partialGain: 0.06,
+      notes: [
+        { t: 0.00, f: 392.00, g: 0.088, d: 0.34 },
+        { t: 0.20, f: 493.88, g: 0.066, d: 0.40 },
+        { t: 0.38, f: 587.33, g: 0.052, d: 0.46 },
+      ],
+    },
+    {
+      id: 'futuristic-sweep',
+      name: 'Futuristic Sweep',
+      shortName: 'Sweep',
+      label: 'Tech · ascendente',
+      waveform: 'sine',
+      attack: 0.020,
+      hold: 0.030,
+      highpass: 220,
+      lowpass: 6500,
+      reverb: 0.12,
+      reverbDuration: 1.00,
+      reverbDecay: 3.5,
+      delay: 0.045,
+      delayFeedback: 0.11,
+      delayGain: 0.12,
+      partialGain: 0.00,
+      notes: [
+        { t: 0.00, f: 420.00, f2: 880.00, g: 0.050, d: 0.46, partial: false },
+        { t: 0.18, f: 720.00, f2: 1320.00, g: 0.038, d: 0.42, partial: false },
+      ],
+    },
+    {
+      id: 'two-tone-notify',
+      name: 'Two-tone Notify',
+      shortName: 'Two-tone',
+      label: 'Clásica · mínima',
+      waveform: 'sine',
+      attack: 0.010,
+      hold: 0.020,
+      highpass: 130,
+      lowpass: 5000,
+      reverb: 0.06,
+      reverbDuration: 0.85,
+      reverbDecay: 3.6,
+      delay: 0.018,
+      delayFeedback: 0.08,
+      delayGain: 0.08,
+      partialGain: 0.14,
+      notes: [
+        { t: 0.00, f: 554.37, g: 0.075, d: 0.34 },
+        { t: 0.18, f: 830.61, g: 0.060, d: 0.42 },
+      ],
+    },
+    {
+      id: 'soft-success-chime',
+      name: 'Soft Success Chime',
+      shortName: 'Success',
+      label: 'Positiva · limpia',
+      waveform: 'sine',
+      attack: 0.014,
+      hold: 0.025,
+      highpass: 160,
+      lowpass: 5600,
+      reverb: 0.16,
+      reverbDuration: 1.20,
+      reverbDecay: 3.4,
+      delay: 0.055,
+      delayFeedback: 0.10,
+      delayGain: 0.12,
+      partialGain: 0.16,
+      notes: [
+        { t: 0.00, f: 523.25, g: 0.060, d: 0.60 },
+        { t: 0.10, f: 659.25, g: 0.052, d: 0.65 },
+        { t: 0.20, f: 783.99, g: 0.046, d: 0.72 },
+        { t: 0.34, f: 1046.50, g: 0.032, d: 0.78 },
+      ],
+    },
+    {
+      id: 'low-velvet-bell',
+      name: 'Low Velvet Bell',
+      shortName: 'Velvet',
+      label: 'Grave · cómoda',
+      waveform: 'sine',
+      attack: 0.020,
+      hold: 0.035,
+      highpass: 80,
+      lowpass: 3600,
+      reverb: 0.24,
+      reverbDuration: 1.60,
+      reverbDecay: 3.1,
+      delay: 0.070,
+      delayFeedback: 0.11,
+      delayGain: 0.13,
+      partialGain: 0.14,
+      notes: [
+        { t: 0.00, f: 329.63, g: 0.080, d: 1.00 },
+        { t: 0.24, f: 415.30, g: 0.055, d: 1.05 },
+        { t: 0.48, f: 493.88, g: 0.038, d: 1.00 },
+      ],
+    },
+  ];
+  const CHATGPT_LAT_COMPLETION_URL = 'https://chatgpt.com/backend-api/lat/r';
   const CHATGPT_NETWORK_HOOK_RETRY_MS = 2000;
 
-  const GEMINI_NETWORK_TARGET_ENDPOINT = "batchexecute";
+  const GEMINI_NETWORK_TARGET_ENDPOINT = 'batchexecute';
   const GEMINI_NETWORK_BURST_THRESHOLD = 3;
   const GEMINI_NETWORK_PULSE_TIMEOUT_MS = 3500;
   const GEMINI_NETWORK_MONITOR_INTERVAL_MS = 1000;
 
   const AUTO_SEND_CHECK_EVERY_MS = 400;
   const AUTO_SEND_DEBOUNCE_MS = 90;
-  const AUTO_SEND_RE =
-    /(^|\b)(send|submit|enviar|env[ií]a|envoyer|senden|invia)(\b|$)/i;
-  const AUTO_SEND_PENDING_RE =
-    /(file\s*upload\s*pending|upload\s*pending|subida\s+de\s+archivo\s+pendiente|archivo\s+pendiente|carga\s+de\s+archivo\s+pendiente|subiendo\s+archivo|uploading\s+file|processing\s+file|procesando\s+archivo)/i;
-  const AUTO_SEND_STOP_RE =
-    /(^|\b)(stop|detener|cancelar|interrumpir|parar|stop\s+streaming)(\b|$)/i;
-  const AUTO_SEND_FILE_EXT_RE =
-    /\.(?:user\.js|js|txt|md|pdf|docx|doc|xlsx|xls|pptx|ppt|csv|json|zip|rar|7z|png|jpe?g|webp|gif|svg|html|css|py|ipynb|xml|yaml|yml)(?:\b|$|[?#])/i;
-  const AUTO_SEND_DOWNLOAD_HINT_RE =
-    /(download|sandbox|files|file|attachment|backend-api|blob:|usercontent)/i;
+  const AUTO_SEND_RE = /(^|\b)(send|submit|enviar|env[ií]a|envoyer|senden|invia)(\b|$)/i;
+  const AUTO_SEND_PENDING_RE = /(file\s*upload\s*pending|upload\s*pending|subida\s+de\s+archivo\s+pendiente|archivo\s+pendiente|carga\s+de\s+archivo\s+pendiente|subiendo\s+archivo|uploading\s+file|processing\s+file|procesando\s+archivo)/i;
+  const AUTO_SEND_STOP_RE = /(^|\b)(stop|detener|cancelar|interrumpir|parar|stop\s+streaming)(\b|$)/i;
+  const AUTO_SEND_FILE_EXT_RE = /\.(?:user\.js|js|txt|md|pdf|docx|doc|xlsx|xls|pptx|ppt|csv|json|zip|rar|7z|png|jpe?g|webp|gif|svg|html|css|py|ipynb|xml|yaml|yml)(?:\b|$|[?#])/i;
+  const AUTO_SEND_DOWNLOAD_HINT_RE = /(download|sandbox|files|file|attachment|backend-api|blob:|usercontent)/i;
 
-  const THEME_ORDER = ["auto", "dark", "light"];
-  const COLOR_SCHEME_QUERY = window.matchMedia
-    ? window.matchMedia("(prefers-color-scheme: dark)")
-    : null;
+
+  const THEME_ORDER = ['auto', 'dark', 'light'];
+  const COLOR_SCHEME_QUERY = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
 
   const STATE = {
-    filterMode: "all", // all | user | ai
+    filterMode: 'all', // all | user | ai
     items: [],
     currentIndex: -1,
     observer: null,
@@ -103,13 +327,14 @@
     navLockUntil: 0,
     navLockIndex: -1,
     lastFocusedElement: null,
-    lastFocusedText: "",
-    lastFocusedType: "",
-    themeMode: "auto",
-    resolvedTheme: "dark",
+    lastFocusedText: '',
+    lastFocusedType: '',
+    themeMode: 'auto',
+    resolvedTheme: 'dark',
     panelPosition: null,
     alarmEnabled: false,
     alarmVolume: ALARM_VOLUME_DEFAULT,
+    alarmToneId: ALARM_TONE_DEFAULT_ID,
     alarmAudioCtx: null,
     alarmKeepAliveAudio: null,
     lastAlarmAt: 0,
@@ -118,7 +343,7 @@
     autoSendObserver: null,
     autoSendPollTimer: null,
     autoSendDebounceTimer: null,
-    autoSendLastStatus: "Auto enviar al estar listo.",
+    autoSendLastStatus: 'Auto enviar al estar listo.',
     chatgptNetworkInitialized: false,
     chatgptNetworkMonitor: null,
     chatgptNetworkHookRetryAt: 0,
@@ -139,9 +364,9 @@
   };
 
   const FILTER_LABELS = {
-    all: "Todos",
-    user: "Prompt de usuario",
-    ai: "Respuesta de AI",
+    all: 'Todos',
+    user: 'Prompt de usuario',
+    ai: 'Respuesta de AI',
   };
 
   const SELECTORS = {
@@ -151,38 +376,54 @@
           'div[data-message-author-role="user"]',
           'div[class*="user-message-bubble"]',
         ],
-        text: [".whitespace-pre-wrap", ".text-message"],
+        text: [
+          '.whitespace-pre-wrap',
+          '.text-message',
+        ],
       },
       ai: {
-        items: ['div[data-message-author-role="assistant"]'],
-        text: [".markdown", ".prose", '[data-message-author-role="assistant"]'],
+        items: [
+          'div[data-message-author-role="assistant"]',
+        ],
+        text: [
+          '.markdown',
+          '.prose',
+          '[data-message-author-role="assistant"]',
+        ],
       },
     },
     gemini: {
       user: {
         items: [
           'span[class^="user-query-bubble"]',
-          "div.query-text",
-          "message-content .query-text",
+          'div.query-text',
+          'message-content .query-text',
         ],
-        text: [".horizontal-container .query-text p", "p", ".query-text"],
+        text: [
+          '.horizontal-container .query-text p',
+          'p',
+          '.query-text',
+        ],
       },
       ai: {
         items: [
           'div[class^="markdown markdown-main-panel"]',
-          "message-content .model-response-text",
-          "model-response .markdown",
+          'message-content .model-response-text',
+          'model-response .markdown',
         ],
-        text: ["p", ".markdown", ".model-response-text"],
+        text: [
+          'p',
+          '.markdown',
+          '.model-response-text',
+        ],
       },
     },
   };
 
   function detectPlatform() {
     const host = location.hostname;
-    if (host === "chatgpt.com" || host.endsWith(".chatgpt.com"))
-      return "chatgpt";
-    if (host === "gemini.google.com") return "gemini";
+    if (host === 'chatgpt.com' || host.endsWith('.chatgpt.com')) return 'chatgpt';
+    if (host === 'gemini.google.com') return 'gemini';
     return null;
   }
 
@@ -199,17 +440,13 @@
   }
 
   function getSafeText(element, textSelectors) {
-    if (!element) return "";
+    if (!element) return '';
 
     for (const selector of textSelectors) {
       try {
-        const found = element.matches(selector)
-          ? element
-          : element.querySelector(selector);
+        const found = element.matches(selector) ? element : element.querySelector(selector);
         if (found) {
-          const text = (found.innerText || found.textContent || "")
-            .replace(/\s+/g, " ")
-            .trim();
+          const text = (found.innerText || found.textContent || '').replace(/\s+/g, ' ').trim();
           if (text) return text;
         }
       } catch (_) {
@@ -217,9 +454,7 @@
       }
     }
 
-    return (element.innerText || element.textContent || "")
-      .replace(/\s+/g, " ")
-      .trim();
+    return (element.innerText || element.textContent || '').replace(/\s+/g, ' ').trim();
   }
 
   function isVisibleEnough(element) {
@@ -249,16 +484,12 @@
     if (a.text !== b.text) return false;
 
     if (a.element === b.element) return true;
-    if (a.element.contains(b.element) || b.element.contains(a.element))
-      return true;
+    if (a.element.contains(b.element) || b.element.contains(a.element)) return true;
 
     const rectA = getAbsoluteRect(a.element);
     const rectB = getAbsoluteRect(b.element);
     const closeTop = Math.abs(rectA.top - rectB.top) <= 28;
-    const overlapY = Math.max(
-      0,
-      Math.min(rectA.bottom, rectB.bottom) - Math.max(rectA.top, rectB.top),
-    );
+    const overlapY = Math.max(0, Math.min(rectA.bottom, rectB.bottom) - Math.max(rectA.top, rectB.top));
     const minHeight = Math.max(1, Math.min(rectA.height, rectB.height));
     const heavyOverlap = overlapY / minHeight >= 0.6;
 
@@ -284,18 +515,12 @@
     if (!STATE.items.length) return -1;
 
     if (STATE.lastFocusedElement && STATE.lastFocusedElement.isConnected) {
-      const byElement = STATE.items.findIndex(
-        (item) => item.element === STATE.lastFocusedElement,
-      );
+      const byElement = STATE.items.findIndex((item) => item.element === STATE.lastFocusedElement);
       if (byElement !== -1) return byElement;
     }
 
     if (STATE.lastFocusedText && STATE.lastFocusedType) {
-      const bySignature = STATE.items.findIndex(
-        (item) =>
-          item.type === STATE.lastFocusedType &&
-          item.fullText === STATE.lastFocusedText,
-      );
+      const bySignature = STATE.items.findIndex((item) => item.type === STATE.lastFocusedType && item.fullText === STATE.lastFocusedText);
       if (bySignature !== -1) return bySignature;
     }
 
@@ -305,8 +530,8 @@
   function rememberItemAsAnchor(index) {
     if (index < 0 || index >= STATE.items.length) {
       STATE.lastFocusedElement = null;
-      STATE.lastFocusedText = "";
-      STATE.lastFocusedType = "";
+      STATE.lastFocusedText = '';
+      STATE.lastFocusedType = '';
       return;
     }
 
@@ -318,11 +543,7 @@
   }
 
   function hasActiveNavLock() {
-    return (
-      Date.now() < STATE.navLockUntil &&
-      STATE.navLockIndex >= 0 &&
-      STATE.navLockIndex < STATE.items.length
-    );
+    return Date.now() < STATE.navLockUntil && STATE.navLockIndex >= 0 && STATE.navLockIndex < STATE.items.length;
   }
 
   function clearNavigationLock() {
@@ -355,7 +576,7 @@
 
     for (const el of queryMany(defs.user.items)) {
       pool.push({
-        type: "user",
+        type: 'user',
         element: el,
         top: el.getBoundingClientRect().top + window.scrollY,
         text: getSafeText(el, defs.user.text),
@@ -364,7 +585,7 @@
 
     for (const el of queryMany(defs.ai.items)) {
       pool.push({
-        type: "ai",
+        type: 'ai',
         element: el,
         top: el.getBoundingClientRect().top + window.scrollY,
         text: getSafeText(el, defs.ai.text),
@@ -391,16 +612,14 @@
       dedup.push(item);
     }
 
-    const filtered = dedup.filter(
-      (item) => STATE.filterMode === "all" || item.type === STATE.filterMode,
-    );
+    const filtered = dedup.filter((item) => STATE.filterMode === 'all' || item.type === STATE.filterMode);
 
     STATE.items = filtered.map((item, index) => ({
       index,
       type: item.type,
       element: item.element,
       fullText: item.text,
-      preview: item.text.length > 90 ? item.text.slice(0, 90) + "…" : item.text,
+      preview: item.text.length > 90 ? item.text.slice(0, 90) + '…' : item.text,
     }));
 
     const anchoredIndex = findAnchoredIndex();
@@ -421,12 +640,7 @@
       return;
     }
 
-    if (
-      !force &&
-      Date.now() < STATE.navLockUntil &&
-      STATE.navLockIndex >= 0 &&
-      STATE.navLockIndex < STATE.items.length
-    ) {
+    if (!force && Date.now() < STATE.navLockUntil && STATE.navLockIndex >= 0 && STATE.navLockIndex < STATE.items.length) {
       STATE.currentIndex = STATE.navLockIndex;
       return;
     }
@@ -444,11 +658,7 @@
       const bottom = top + Math.max(rect.height, 1);
       const distanceToTop = Math.abs(top - viewportTop);
 
-      if (
-        viewportTop >= top &&
-        viewportTop < bottom &&
-        containingIndex === -1
-      ) {
+      if (viewportTop >= top && viewportTop < bottom && containingIndex === -1) {
         containingIndex = index;
       }
 
@@ -458,8 +668,7 @@
       }
     });
 
-    STATE.currentIndex =
-      containingIndex !== -1 ? containingIndex : nearestIndex;
+    STATE.currentIndex = containingIndex !== -1 ? containingIndex : nearestIndex;
   }
 
   function getScrollParent(element) {
@@ -468,10 +677,7 @@
     let parent = element.parentElement;
     while (parent) {
       const style = window.getComputedStyle(parent);
-      if (
-        parent.scrollHeight > parent.clientHeight &&
-        (style.overflowY === "auto" || style.overflowY === "scroll")
-      ) {
+      if (parent.scrollHeight > parent.clientHeight && (style.overflowY === 'auto' || style.overflowY === 'scroll')) {
         return parent;
       }
       parent = parent.parentElement;
@@ -496,29 +702,25 @@
       target.style.scrollMarginTop = `${topOffset}px`;
 
       if (scrollParent === document.documentElement) {
-        const targetTop =
-          window.scrollY + target.getBoundingClientRect().top - topOffset;
+        const targetTop = window.scrollY + target.getBoundingClientRect().top - topOffset;
         window.scrollTo({
           top: Math.max(0, targetTop),
-          behavior: "smooth",
+          behavior: 'smooth',
         });
       } else {
         const parentRect = scrollParent.getBoundingClientRect();
         const targetRect = target.getBoundingClientRect();
-        const targetTop =
-          scrollParent.scrollTop +
-          (targetRect.top - parentRect.top) -
-          topOffset;
+        const targetTop = scrollParent.scrollTop + (targetRect.top - parentRect.top) - topOffset;
         scrollParent.scrollTo({
           top: Math.max(0, targetTop),
-          behavior: "smooth",
+          behavior: 'smooth',
         });
       }
     } catch (_) {
       target.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-        inline: "nearest",
+        behavior: 'smooth',
+        block: 'start',
+        inline: 'nearest',
       });
     }
 
@@ -555,8 +757,8 @@
   }
 
   function flashItem(element) {
-    element.classList.add("__cg_nav_flash");
-    setTimeout(() => element.classList.remove("__cg_nav_flash"), 1300);
+    element.classList.add('__cg_nav_flash');
+    setTimeout(() => element.classList.remove('__cg_nav_flash'), 1300);
   }
 
   function readStorageJson(key) {
@@ -571,7 +773,7 @@
   function writeStorageJson(key, value) {
     try {
       localStorage.setItem(key, JSON.stringify(value));
-    } catch (_) {}
+    } catch (_) { }
   }
 
   function loadUiPreferences() {
@@ -581,11 +783,7 @@
     }
 
     const storedPosition = readStorageJson(STORAGE_KEYS.position);
-    if (
-      storedPosition &&
-      Number.isFinite(storedPosition.left) &&
-      Number.isFinite(storedPosition.top)
-    ) {
+    if (storedPosition && Number.isFinite(storedPosition.left) && Number.isFinite(storedPosition.top)) {
       STATE.panelPosition = {
         left: storedPosition.left,
         top: storedPosition.top,
@@ -593,32 +791,29 @@
     }
 
     const storedAlarmEnabled = localStorage.getItem(STORAGE_KEYS.alarmEnabled);
-    STATE.alarmEnabled = storedAlarmEnabled === "1";
+    STATE.alarmEnabled = storedAlarmEnabled === '1';
 
-    const storedAlarmVolume = Number(
-      localStorage.getItem(STORAGE_KEYS.alarmVolume),
-    );
+    const storedAlarmVolume = Number(localStorage.getItem(STORAGE_KEYS.alarmVolume));
     if (Number.isFinite(storedAlarmVolume)) {
       STATE.alarmVolume = clampAlarmVolume(storedAlarmVolume);
+    }
+
+    const storedAlarmTone = localStorage.getItem(STORAGE_KEYS.alarmTone);
+    if (getAlarmToneById(storedAlarmTone)) {
+      STATE.alarmToneId = storedAlarmTone;
     }
   }
 
   function getResolvedTheme() {
-    if (STATE.themeMode === "dark") return "dark";
-    if (STATE.themeMode === "light") return "light";
-    return COLOR_SCHEME_QUERY && COLOR_SCHEME_QUERY.matches ? "dark" : "light";
+    if (STATE.themeMode === 'dark') return 'dark';
+    if (STATE.themeMode === 'light') return 'light';
+    return COLOR_SCHEME_QUERY && COLOR_SCHEME_QUERY.matches ? 'dark' : 'light';
   }
 
   function applyTheme() {
     STATE.resolvedTheme = getResolvedTheme();
-    document.documentElement.setAttribute(
-      "data-__cg-nav-theme",
-      STATE.resolvedTheme,
-    );
-    document.documentElement.setAttribute(
-      "data-__cg-nav-theme-mode",
-      STATE.themeMode,
-    );
+    document.documentElement.setAttribute('data-__cg-nav-theme', STATE.resolvedTheme);
+    document.documentElement.setAttribute('data-__cg-nav-theme-mode', STATE.themeMode);
     refreshThemeControls();
   }
 
@@ -629,13 +824,14 @@
 
     try {
       localStorage.setItem(STORAGE_KEYS.theme, STATE.themeMode);
-    } catch (_) {}
+    } catch (_) { }
 
     applyTheme();
   }
 
+
   function getThemeIconSvg(mode) {
-    if (mode === "dark") {
+    if (mode === 'dark') {
       return `
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
           <path d="M20 15.31A8 8 0 0 1 8.69 4 9 9 0 1 0 20 15.31z" fill="currentColor"></path>
@@ -643,7 +839,7 @@
       `;
     }
 
-    if (mode === "light") {
+    if (mode === 'light') {
       return `
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
           <circle cx="12" cy="12" r="4" fill="currentColor"></circle>
@@ -679,6 +875,84 @@
     `;
   }
 
+
+  function getAlarmToneIconSvg() {
+    return `
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <path d="M9 18V6l10-2v12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" fill="none"></path>
+        <circle cx="6.5" cy="18" r="2.5" fill="currentColor"></circle>
+        <circle cx="16.5" cy="16" r="2.5" fill="currentColor"></circle>
+      </svg>
+    `;
+  }
+
+  function getAlarmToneById(id) {
+    return ALARM_TONES.find((tone) => tone.id === id) || null;
+  }
+
+  function getSelectedAlarmTone() {
+    return getAlarmToneById(STATE.alarmToneId) || getAlarmToneById(ALARM_TONE_DEFAULT_ID) || ALARM_TONES[0];
+  }
+
+  function setAlarmTone(id) {
+    const tone = getAlarmToneById(id);
+    if (!tone) return;
+
+    STATE.alarmToneId = tone.id;
+
+    try {
+      localStorage.setItem(STORAGE_KEYS.alarmTone, tone.id);
+    } catch (_) { }
+
+    refreshAlarmToneControls();
+  }
+
+  function getAlarmToneOptionHtml(tone, active) {
+    return `
+      <span class="__cg_nav_tone_check">${active ? '✓' : ''}</span>
+      <span class="__cg_nav_tone_text">
+        <span class="__cg_nav_tone_name">${tone.name}</span>
+        <span class="__cg_nav_tone_hint">${tone.label}</span>
+      </span>
+    `;
+  }
+
+  function refreshAlarmToneControls() {
+    const selectedTone = getSelectedAlarmTone();
+    if (!selectedTone) return;
+
+    const toggles = document.querySelectorAll('[data-role="__cg_nav_alarm_tone_toggle"]');
+    toggles.forEach((button) => {
+      setSafeInnerHTML(button, `
+        <span class="__cg_nav_menu_label">
+          ${getAlarmToneIconSvg()}
+          <span>Tono</span>
+        </span>
+        <span class="__cg_nav_menu_value">${selectedTone.shortName || selectedTone.name}</span>
+      `);
+      button.setAttribute('aria-label', `Tono de alarma: ${selectedTone.name}`);
+      button.title = `Tono de alarma: ${selectedTone.name}. Click para elegir.`;
+    });
+
+    const options = document.querySelectorAll('[data-role="__cg_nav_alarm_tone_option"]');
+    options.forEach((button) => {
+      const tone = getAlarmToneById(button.dataset.toneId);
+      if (!tone) return;
+
+      const active = tone.id === selectedTone.id;
+      button.classList.toggle('__cg_nav_active_tone', active);
+      button.setAttribute('aria-pressed', active ? 'true' : 'false');
+      button.setAttribute('aria-label', `Seleccionar tono ${tone.name}`);
+      setSafeInnerHTML(button, getAlarmToneOptionHtml(tone, active));
+    });
+
+    const previewButtons = document.querySelectorAll('[data-role="__cg_nav_alarm_tone_preview"]');
+    previewButtons.forEach((button) => {
+      button.textContent = `Probar ${selectedTone.shortName || selectedTone.name}`;
+      button.title = `Probar tono: ${selectedTone.name}`;
+    });
+  }
+
   function getListIconSvg() {
     return `
       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
@@ -710,67 +984,50 @@
   }
 
   function refreshThemeControls() {
-    const controls = document.querySelectorAll(
-      '[data-role="__cg_nav_theme_toggle"]',
-    );
+    const controls = document.querySelectorAll('[data-role="__cg_nav_theme_toggle"]');
     controls.forEach((button) => {
-      const isMenuControl = button.dataset.display === "__cg_nav_menu";
+      const isMenuControl = button.dataset.display === '__cg_nav_menu';
       if (isMenuControl) {
-        setSafeInnerHTML(
-          button,
-          `
+        setSafeInnerHTML(button, `
           <span class="__cg_nav_menu_label">
             ${getThemeIconSvg(STATE.themeMode)}
             <span>Tema</span>
           </span>
           <span class="__cg_nav_menu_value">${STATE.themeMode}</span>
-        `,
-        );
+        `);
       } else {
         setSafeInnerHTML(button, getThemeIconSvg(STATE.themeMode));
       }
-      button.setAttribute("aria-label", `Tema: ${STATE.themeMode}`);
-      button.setAttribute("data-theme-mode", STATE.themeMode);
+      button.setAttribute('aria-label', `Tema: ${STATE.themeMode}`);
+      button.setAttribute('data-theme-mode', STATE.themeMode);
       button.title = `Tema: ${STATE.themeMode}. Click para alternar.`;
     });
   }
 
   function refreshAlarmControls() {
-    const controls = document.querySelectorAll(
-      '[data-role="__cg_nav_alarm_toggle"]',
-    );
+    const controls = document.querySelectorAll('[data-role="__cg_nav_alarm_toggle"]');
     controls.forEach((button) => {
-      const isMenuControl = button.dataset.display === "__cg_nav_menu";
+      const isMenuControl = button.dataset.display === '__cg_nav_menu';
       if (isMenuControl) {
-        setSafeInnerHTML(
-          button,
-          `
+        setSafeInnerHTML(button, `
           <span class="__cg_nav_menu_label">
             ${getAlarmIconSvg(STATE.alarmEnabled)}
             <span>Alarma</span>
           </span>
-          <span class="__cg_nav_menu_value">${STATE.alarmEnabled ? "Activada" : "Desactivada"}</span>
-        `,
-        );
+          <span class="__cg_nav_menu_value">${STATE.alarmEnabled ? 'Activada' : 'Desactivada'}</span>
+        `);
       } else {
         setSafeInnerHTML(button, getAlarmIconSvg(STATE.alarmEnabled));
       }
-      button.classList.toggle("__cg_nav_primary", STATE.alarmEnabled);
-      button.classList.toggle("__cg_nav_ghost", !STATE.alarmEnabled);
-      button.setAttribute(
-        "aria-pressed",
-        STATE.alarmEnabled ? "true" : "false",
-      );
-      button.setAttribute(
-        "aria-label",
-        STATE.alarmEnabled ? "Alarma activada" : "Alarma desactivada",
-      );
-      button.title = STATE.alarmEnabled
-        ? "Alarma activada"
-        : "Alarma desactivada";
+      button.classList.toggle('__cg_nav_primary', STATE.alarmEnabled);
+      button.classList.toggle('__cg_nav_ghost', !STATE.alarmEnabled);
+      button.setAttribute('aria-pressed', STATE.alarmEnabled ? 'true' : 'false');
+      button.setAttribute('aria-label', STATE.alarmEnabled ? 'Alarma activada' : 'Alarma desactivada');
+      button.title = STATE.alarmEnabled ? 'Alarma activada' : 'Alarma desactivada';
     });
 
     refreshAlarmVolumeControls();
+    refreshAlarmToneControls();
   }
 
   function clampAlarmVolume(value) {
@@ -785,19 +1042,15 @@
 
   function refreshAlarmVolumeControls() {
     const percent = getAlarmVolumePercent();
-    const controls = document.querySelectorAll(
-      '[data-role="__cg_nav_alarm_volume"]',
-    );
+    const controls = document.querySelectorAll('[data-role="__cg_nav_alarm_volume"]');
     controls.forEach((input) => {
       const value = Math.round(STATE.alarmVolume * 100);
       input.value = String(value);
       input.title = `Volumen: ${percent}%`;
-      input.setAttribute("aria-label", `Volumen de alarma: ${percent}%`);
+      input.setAttribute('aria-label', `Volumen de alarma: ${percent}%`);
     });
 
-    const valueLabels = document.querySelectorAll(
-      '[data-role="__cg_nav_alarm_volume_value"]',
-    );
+    const valueLabels = document.querySelectorAll('[data-role="__cg_nav_alarm_volume_value"]');
     valueLabels.forEach((label) => {
       label.textContent = `${percent}%`;
     });
@@ -808,20 +1061,18 @@
 
     try {
       localStorage.setItem(STORAGE_KEYS.alarmVolume, String(STATE.alarmVolume));
-    } catch (_) {}
+    } catch (_) { }
 
     refreshAlarmVolumeControls();
   }
+
 
   function setAlarmEnabled(enabled) {
     STATE.alarmEnabled = !!enabled;
 
     try {
-      localStorage.setItem(
-        STORAGE_KEYS.alarmEnabled,
-        STATE.alarmEnabled ? "1" : "0",
-      );
-    } catch (_) {}
+      localStorage.setItem(STORAGE_KEYS.alarmEnabled, STATE.alarmEnabled ? '1' : '0');
+    } catch (_) { }
 
     if (STATE.alarmEnabled) {
       initAlarmAudio();
@@ -847,28 +1098,25 @@
         const Ctx = window.AudioContext || window.webkitAudioContext;
         if (Ctx) STATE.alarmAudioCtx = new Ctx();
       }
-      if (STATE.alarmAudioCtx && STATE.alarmAudioCtx.state === "suspended") {
-        STATE.alarmAudioCtx.resume().catch(() => {});
+      if (STATE.alarmAudioCtx && STATE.alarmAudioCtx.state === 'suspended') {
+        STATE.alarmAudioCtx.resume().catch(() => { });
       }
-    } catch (_) {}
+    } catch (_) { }
   }
 
   function startAlarmKeepAlive() {
     if (STATE.alarmKeepAliveAudio) return;
 
     try {
-      const b64Data =
-        "UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
-      const bytes = Uint8Array.from(atob(b64Data), (char) =>
-        char.charCodeAt(0),
-      );
-      const blob = new Blob([bytes], { type: "audio/wav" });
+      const b64Data = 'UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA';
+      const bytes = Uint8Array.from(atob(b64Data), (char) => char.charCodeAt(0));
+      const blob = new Blob([bytes], { type: 'audio/wav' });
       const audio = new Audio(URL.createObjectURL(blob));
       audio.loop = true;
       audio.volume = 0.01;
-      audio.play().catch(() => {});
+      audio.play().catch(() => { });
       STATE.alarmKeepAliveAudio = audio;
-    } catch (_) {}
+    } catch (_) { }
   }
 
   function stopAlarmKeepAlive() {
@@ -877,8 +1125,8 @@
 
     try {
       audio.pause();
-      audio.src = "";
-    } catch (_) {}
+      audio.src = '';
+    } catch (_) { }
 
     STATE.alarmKeepAliveAudio = null;
   }
@@ -887,24 +1135,14 @@
     return STATE.alarmEnabled && (document.hidden || !document.hasFocus());
   }
 
-  function scheduleGainEnvelope(
-    gainParam,
-    startAt,
-    peak,
-    attack = 0.018,
-    hold = 0.035,
-    release = 1.85,
-  ) {
+  function scheduleGainEnvelope(gainParam, startAt, peak, attack = 0.018, hold = 0.035, release = 1.85) {
     const floor = 0.0001;
     try {
       gainParam.cancelScheduledValues(startAt);
       gainParam.setValueAtTime(floor, startAt);
       gainParam.linearRampToValueAtTime(peak, startAt + attack);
       gainParam.setValueAtTime(peak * 0.82, startAt + attack + hold);
-      gainParam.exponentialRampToValueAtTime(
-        floor,
-        startAt + attack + hold + release,
-      );
+      gainParam.exponentialRampToValueAtTime(floor, startAt + attack + hold + release);
     } catch (_) {}
   }
 
@@ -940,11 +1178,11 @@
     wet.gain.setValueAtTime(0.26, ctx.currentTime);
     master.gain.setValueAtTime(STATE.alarmVolume, ctx.currentTime);
 
-    highpass.type = "highpass";
+    highpass.type = 'highpass';
     highpass.frequency.setValueAtTime(180, ctx.currentTime);
     highpass.Q.setValueAtTime(0.72, ctx.currentTime);
 
-    lowpass.type = "lowpass";
+    lowpass.type = 'lowpass';
     lowpass.frequency.setValueAtTime(7600, ctx.currentTime);
     lowpass.Q.setValueAtTime(0.52, ctx.currentTime);
 
@@ -971,38 +1209,17 @@
     wet.connect(master);
     master.connect(ctx.destination);
 
-    const nodes = [
-      dry,
-      wet,
-      master,
-      highpass,
-      lowpass,
-      compressor,
-      delay,
-      delayFeedback,
-      convolver,
-    ];
+    const nodes = [dry, wet, master, highpass, lowpass, compressor, delay, delayFeedback, convolver];
     dry.__cgNavDisconnect = () => {
       nodes.forEach((node) => {
-        try {
-          node.disconnect();
-        } catch (_) {}
+        try { node.disconnect(); } catch (_) {}
       });
     };
 
     return dry;
   }
 
-  function scheduleBellPartial(
-    ctx,
-    output,
-    frequency,
-    startAt,
-    gainValue,
-    duration,
-    type = "sine",
-    detune = 0,
-  ) {
+  function scheduleBellPartial(ctx, output, frequency, startAt, gainValue, duration, type = 'sine', detune = 0) {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     const panner = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
@@ -1015,10 +1232,7 @@
 
     osc.connect(gain);
     if (panner) {
-      const pan = Math.max(
-        -0.34,
-        Math.min(0.34, Math.sin(frequency * 0.017) * 0.22),
-      );
+      const pan = Math.max(-0.34, Math.min(0.34, Math.sin(frequency * 0.017) * 0.22));
       panner.pan.setValueAtTime(pan, startAt);
       gain.connect(panner);
       panner.connect(output);
@@ -1028,6 +1242,195 @@
 
     osc.start(startAt);
     osc.stop(startAt + duration + 0.12);
+  }
+
+
+  function makeConfiguredAlarmOutputChain(ctx, tone) {
+    const dry = ctx.createGain();
+    const wet = ctx.createGain();
+    const master = ctx.createGain();
+    const highpass = ctx.createBiquadFilter();
+    const lowpass = ctx.createBiquadFilter();
+    const compressor = ctx.createDynamicsCompressor();
+    const nodes = [dry, wet, master, highpass, lowpass, compressor];
+
+    dry.gain.setValueAtTime(Number.isFinite(tone.dry) ? tone.dry : 0.86, ctx.currentTime);
+    wet.gain.setValueAtTime(Number.isFinite(tone.reverb) ? tone.reverb : 0.10, ctx.currentTime);
+    master.gain.setValueAtTime(STATE.alarmVolume, ctx.currentTime);
+
+    highpass.type = 'highpass';
+    highpass.frequency.setValueAtTime(tone.highpass || 120, ctx.currentTime);
+    highpass.Q.setValueAtTime(0.72, ctx.currentTime);
+
+    lowpass.type = 'lowpass';
+    lowpass.frequency.setValueAtTime(tone.lowpass || 5600, ctx.currentTime);
+    lowpass.Q.setValueAtTime(0.52, ctx.currentTime);
+
+    compressor.threshold.setValueAtTime(-22, ctx.currentTime);
+    compressor.knee.setValueAtTime(18, ctx.currentTime);
+    compressor.ratio.setValueAtTime(3.0, ctx.currentTime);
+    compressor.attack.setValueAtTime(0.006, ctx.currentTime);
+    compressor.release.setValueAtTime(0.20, ctx.currentTime);
+
+    dry.connect(highpass);
+    highpass.connect(lowpass);
+    lowpass.connect(compressor);
+    compressor.connect(master);
+
+    if ((tone.delay || 0) > 0) {
+      const delay = ctx.createDelay(1.0);
+      const delayFeedback = ctx.createGain();
+      const delayGain = ctx.createGain();
+
+      delay.delayTime.setValueAtTime(tone.delay, ctx.currentTime);
+      delayFeedback.gain.setValueAtTime(Number.isFinite(tone.delayFeedback) ? tone.delayFeedback : 0.10, ctx.currentTime);
+      delayGain.gain.setValueAtTime(Number.isFinite(tone.delayGain) ? tone.delayGain : 0.12, ctx.currentTime);
+
+      compressor.connect(delay);
+      delay.connect(delayFeedback);
+      delayFeedback.connect(delay);
+      delay.connect(delayGain);
+      delayGain.connect(master);
+      nodes.push(delay, delayFeedback, delayGain);
+    }
+
+    if ((tone.reverb || 0) > 0) {
+      const convolver = ctx.createConvolver();
+      convolver.buffer = createAlarmImpulseResponse(
+        ctx,
+        tone.reverbDuration || 1.05,
+        tone.reverbDecay || 3.4,
+      );
+      compressor.connect(convolver);
+      convolver.connect(wet);
+      wet.connect(master);
+      nodes.push(convolver);
+    }
+
+    master.connect(ctx.destination);
+
+    dry.__cgNavDisconnect = () => {
+      nodes.forEach((node) => {
+        try { node.disconnect(); } catch (_) {}
+      });
+    };
+
+    return dry;
+  }
+
+  function scheduleConfiguredAlarmNote(ctx, output, tone, note, baseAt, gainScale, scheduledNodes) {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    const panner = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+    const startAt = baseAt + (note.t || 0);
+    const duration = Number.isFinite(note.d) ? note.d : 0.45;
+    const attack = Number.isFinite(tone.attack) ? tone.attack : 0.016;
+    const hold = Number.isFinite(tone.hold) ? tone.hold : 0.025;
+    const frequency = note.f || 660;
+    const peak = (Number.isFinite(note.g) ? note.g : 0.05) * gainScale;
+
+    osc.type = note.type || tone.waveform || 'sine';
+    osc.frequency.setValueAtTime(frequency, startAt);
+
+    if (note.f2 && note.f2 > 0) {
+      osc.frequency.exponentialRampToValueAtTime(note.f2, startAt + Math.max(0.02, duration));
+    }
+
+    if (osc.detune && Number.isFinite(note.detune)) {
+      osc.detune.setValueAtTime(note.detune, startAt);
+    }
+
+    scheduleGainEnvelope(gain.gain, startAt, peak, attack, hold, duration);
+
+    osc.connect(gain);
+    if (panner) {
+      const pan = Number.isFinite(note.pan)
+        ? note.pan
+        : Math.max(-0.28, Math.min(0.28, Math.sin(frequency * 0.017) * 0.18));
+      panner.pan.setValueAtTime(pan, startAt);
+      gain.connect(panner);
+      panner.connect(output);
+      scheduledNodes.push(panner);
+    } else {
+      gain.connect(output);
+    }
+
+    osc.start(startAt);
+    osc.stop(startAt + attack + hold + duration + 0.12);
+    scheduledNodes.push(osc, gain);
+
+    const partialGain = Number.isFinite(tone.partialGain) ? tone.partialGain : 0.14;
+    if (note.partial !== false && partialGain > 0 && !note.f2 && frequency < 1500) {
+      const partialOsc = ctx.createOscillator();
+      const partialGainNode = ctx.createGain();
+      const partialStartAt = startAt + 0.006;
+      const partialDuration = Math.max(0.12, duration * 0.58);
+
+      partialOsc.type = 'sine';
+      partialOsc.frequency.setValueAtTime(frequency * 2.01, partialStartAt);
+      scheduleGainEnvelope(
+        partialGainNode.gain,
+        partialStartAt,
+        peak * partialGain,
+        attack,
+        hold,
+        partialDuration,
+      );
+
+      partialOsc.connect(partialGainNode);
+      partialGainNode.connect(output);
+      partialOsc.start(partialStartAt);
+      partialOsc.stop(partialStartAt + attack + hold + partialDuration + 0.12);
+      scheduledNodes.push(partialOsc, partialGainNode);
+    }
+  }
+
+  function playConfiguredAlarmTone(tone) {
+    initAlarmAudio();
+    const ctx = STATE.alarmAudioCtx;
+    if (!ctx || !tone || !Array.isArray(tone.notes)) return false;
+
+    const startAt = ctx.currentTime + 0.018;
+    const output = makeConfiguredAlarmOutputChain(ctx, tone);
+    const scheduledNodes = [];
+    const motifDuration = Math.max(...tone.notes.map((note) => (note.t || 0) + (note.d || 0.45)));
+
+    const scheduleToneOnce = (baseAt, gainScale = 1) => {
+      tone.notes.forEach((note) => {
+        scheduleConfiguredAlarmNote(ctx, output, tone, note, baseAt, gainScale, scheduledNodes);
+      });
+    };
+
+    for (let i = 0; i < ALARM_CHIME_REPEAT_COUNT; i += 1) {
+      const baseAt = startAt + (i * ALARM_CHIME_REPEAT_INTERVAL_SEC);
+      const gainScale = Math.max(0.72, 1 - (i * 0.06));
+      scheduleToneOnce(baseAt, gainScale);
+    }
+
+    const tailSeconds = Math.max(1.2, (tone.reverbDuration || 0.9) + 0.9, (tone.delay || 0) + 0.9);
+    const totalMs = Math.ceil(((ALARM_CHIME_REPEAT_COUNT - 1) * ALARM_CHIME_REPEAT_INTERVAL_SEC + motifDuration + tailSeconds) * 1000);
+    window.setTimeout(() => {
+      scheduledNodes.forEach((node) => {
+        try { node.disconnect(); } catch (_) {}
+      });
+
+      try {
+        if (output && typeof output.__cgNavDisconnect === 'function') output.__cgNavDisconnect();
+      } catch (_) {}
+    }, totalMs);
+
+    return true;
+  }
+
+  function playSelectedAlarmTone() {
+    const tone = getSelectedAlarmTone();
+    if (!tone) return false;
+
+    if (tone.kind === 'apple') {
+      return playAppleInspiredChime();
+    }
+
+    return playConfiguredAlarmTone(tone);
   }
 
   function playAppleInspiredChime() {
@@ -1042,92 +1445,44 @@
     // El mismo motivo se repite según ALARM_CHIME_REPEAT_COUNT para que no sea fácil de ignorar.
     // No usa ni replica assets propietarios; sólo osciladores Web Audio.
     const motif = [
-      { t: 0.0, f: 587.33, g: 0.08, d: 1.55 }, // D5
-      { t: 0.14, f: 739.99, g: 0.07, d: 1.65 }, // F#5
-      { t: 0.3, f: 880.0, g: 0.066, d: 1.8 }, // A5
+      { t: 0.00, f: 587.33, g: 0.080, d: 1.55 }, // D5
+      { t: 0.14, f: 739.99, g: 0.070, d: 1.65 }, // F#5
+      { t: 0.30, f: 880.00, g: 0.066, d: 1.80 }, // A5
       { t: 0.54, f: 1108.73, g: 0.054, d: 1.95 }, // C#6
-      { t: 0.84, f: 1174.66, g: 0.05, d: 2.05 }, // D6
+      { t: 0.84, f: 1174.66, g: 0.050, d: 2.05 }, // D6
     ];
 
     const scheduleChimeOnce = (baseAt, gainScale = 1) => {
       motif.forEach((note) => {
         const t = baseAt + note.t;
-        scheduleBellPartial(
-          ctx,
-          output,
-          note.f,
-          t,
-          note.g * gainScale,
-          note.d,
-          "sine",
-          -2,
-        );
-        scheduleBellPartial(
-          ctx,
-          output,
-          note.f * 2.01,
-          t + 0.006,
-          note.g * 0.34 * gainScale,
-          note.d * 0.82,
-          "triangle",
-          3,
-        );
-        scheduleBellPartial(
-          ctx,
-          output,
-          note.f * 3.01,
-          t + 0.012,
-          note.g * 0.12 * gainScale,
-          note.d * 0.55,
-          "sine",
-          -5,
-        );
+        scheduleBellPartial(ctx, output, note.f, t, note.g * gainScale, note.d, 'sine', -2);
+        scheduleBellPartial(ctx, output, note.f * 2.01, t + 0.006, note.g * 0.34 * gainScale, note.d * 0.82, 'triangle', 3);
+        scheduleBellPartial(ctx, output, note.f * 3.01, t + 0.012, note.g * 0.12 * gainScale, note.d * 0.55, 'sine', -5);
       });
 
       // Refuerzo muy suave al final: hace que la notificación dure sin volverse agresiva.
-      scheduleBellPartial(
-        ctx,
-        output,
-        1479.98,
-        baseAt + 1.18,
-        0.028 * gainScale,
-        1.65,
-        "sine",
-        1,
-      ); // F#6
-      scheduleBellPartial(
-        ctx,
-        output,
-        1760.0,
-        baseAt + 1.34,
-        0.02 * gainScale,
-        1.45,
-        "sine",
-        -3,
-      ); // A6
+      scheduleBellPartial(ctx, output, 1479.98, baseAt + 1.18, 0.028 * gainScale, 1.65, 'sine', 1); // F#6
+      scheduleBellPartial(ctx, output, 1760.00, baseAt + 1.34, 0.020 * gainScale, 1.45, 'sine', -3); // A6
     };
 
     for (let i = 0; i < ALARM_CHIME_REPEAT_COUNT; i += 1) {
-      const baseAt = startAt + i * ALARM_CHIME_REPEAT_INTERVAL_SEC;
-      const gainScale = Math.max(0.72, 1 - i * 0.06);
+      const baseAt = startAt + (i * ALARM_CHIME_REPEAT_INTERVAL_SEC);
+      const gainScale = Math.max(0.72, 1 - (i * 0.06));
       scheduleChimeOnce(baseAt, gainScale);
     }
 
-    const totalMs = Math.ceil(
-      ((ALARM_CHIME_REPEAT_COUNT - 1) * ALARM_CHIME_REPEAT_INTERVAL_SEC + 4.2) *
-        1000,
-    );
+    const totalMs = Math.ceil(((ALARM_CHIME_REPEAT_COUNT - 1) * ALARM_CHIME_REPEAT_INTERVAL_SEC + 4.2) * 1000);
     window.setTimeout(() => {
       try {
-        if (output && typeof output.__cgNavDisconnect === "function")
-          output.__cgNavDisconnect();
+        if (output && typeof output.__cgNavDisconnect === 'function') output.__cgNavDisconnect();
       } catch (_) {}
     }, totalMs);
 
     return true;
   }
 
-  function triggerAlarm(message = "Alarma de conversación.") {
+
+  function triggerAlarm(message = 'Alarma de conversación.') {
     const now = Date.now();
     if (!shouldDeliverAlarm()) return false;
     if (now - STATE.lastAlarmAt < ALARM_COOLDOWN_MS) return false;
@@ -1137,11 +1492,11 @@
     try {
       initAlarmAudio();
 
-      playAppleInspiredChime();
+      playSelectedAlarmTone();
 
-      if (typeof GM_notification === "function") {
+      if (typeof GM_notification === 'function') {
         GM_notification({
-          title: PLATFORM === "gemini" ? "Gemini" : "ChatGPT",
+          title: PLATFORM === 'gemini' ? 'Gemini' : 'ChatGPT',
           text: message,
           timeout: 12000,
           onclick: () => window.focus(),
@@ -1154,56 +1509,49 @@
     }
   }
 
+
   function getUserscriptWindow() {
     try {
-      if (typeof unsafeWindow !== "undefined" && unsafeWindow)
-        return unsafeWindow;
-    } catch (_) {}
+      if (typeof unsafeWindow !== 'undefined' && unsafeWindow) return unsafeWindow;
+    } catch (_) { }
     return window;
   }
 
   function extractRequestUrl(input) {
     try {
-      if (typeof input === "string") return input;
+      if (typeof input === 'string') return input;
       if (input instanceof URL) return input.href;
-      if (input && typeof input.href === "string") return input.href;
-      if (input && typeof input.url === "string") return input.url;
-      if (input && typeof input.toString === "function")
-        return input.toString();
-    } catch (_) {}
-    return "";
+      if (input && typeof input.href === 'string') return input.href;
+      if (input && typeof input.url === 'string') return input.url;
+      if (input && typeof input.toString === 'function') return input.toString();
+    } catch (_) { }
+    return '';
   }
 
   function extractRequestMethod(input, init) {
     try {
-      if (init && typeof init.method === "string")
-        return init.method.toUpperCase();
-      if (input && typeof input.method === "string")
-        return input.method.toUpperCase();
-    } catch (_) {}
-    return "GET";
+      if (init && typeof init.method === 'string') return init.method.toUpperCase();
+      if (input && typeof input.method === 'string') return input.method.toUpperCase();
+    } catch (_) { }
+    return 'GET';
   }
 
   function normalizeRequestUrl(url) {
     try {
-      return new URL(String(url || ""), location.href).href;
+      return new URL(String(url || ''), location.href).href;
     } catch (_) {
-      return String(url || "");
+      return String(url || '');
     }
   }
 
   function isChatGptLatCompletionRequest(url, method) {
-    return (
-      PLATFORM === "chatgpt" &&
-      String(method || "").toUpperCase() === "POST" &&
-      normalizeRequestUrl(url) === CHATGPT_LAT_COMPLETION_URL
-    );
+    return PLATFORM === 'chatgpt'
+      && String(method || '').toUpperCase() === 'POST'
+      && normalizeRequestUrl(url) === CHATGPT_LAT_COMPLETION_URL;
   }
 
   function isGeminiBatchExecuteUrl(url) {
-    return (
-      typeof url === "string" && url.includes(GEMINI_NETWORK_TARGET_ENDPOINT)
-    );
+    return typeof url === 'string' && url.includes(GEMINI_NETWORK_TARGET_ENDPOINT);
   }
 
   function resetChatGptNetworkAlarmState() {
@@ -1211,7 +1559,7 @@
   }
 
   function initChatGptNetworkAlarm() {
-    if (PLATFORM !== "chatgpt") return;
+    if (PLATFORM !== 'chatgpt') return;
 
     initChatGptNetworkHooks();
     startChatGptNetworkMonitor();
@@ -1219,7 +1567,7 @@
   }
 
   function initChatGptNetworkHooks() {
-    if (PLATFORM !== "chatgpt") return;
+    if (PLATFORM !== 'chatgpt') return;
 
     const pageWindow = getUserscriptWindow();
     hookChatGptFetch(pageWindow);
@@ -1227,14 +1575,14 @@
   }
 
   function registerChatGptLatCompletion() {
-    if (PLATFORM !== "chatgpt" || !STATE.alarmEnabled) return false;
-    return triggerAlarm("ChatGPT terminó de responder.");
+    if (PLATFORM !== 'chatgpt' || !STATE.alarmEnabled) return false;
+    return triggerAlarm('ChatGPT terminó de responder.');
   }
 
   function hookChatGptFetch(pageWindow) {
     try {
-      if (!pageWindow || typeof pageWindow.fetch !== "function") return;
-      if (isHookedFunction(pageWindow.fetch, "__cgNavChatGptFetchHook")) return;
+      if (!pageWindow || typeof pageWindow.fetch !== 'function') return;
+      if (isHookedFunction(pageWindow.fetch, '__cgNavChatGptFetchHook')) return;
 
       const originalFetch = pageWindow.fetch;
 
@@ -1251,9 +1599,9 @@
         return originalFetch.apply(this, args);
       };
 
-      markHookedFunction(wrappedFetch, "__cgNavChatGptFetchHook");
+      markHookedFunction(wrappedFetch, '__cgNavChatGptFetchHook');
       pageWindow.fetch = wrappedFetch;
-    } catch (_) {}
+    } catch (_) { }
   }
 
   function hookChatGptXhr(pageWindow) {
@@ -1261,24 +1609,16 @@
       const XHR = pageWindow && pageWindow.XMLHttpRequest;
       const proto = XHR && XHR.prototype;
 
-      if (
-        !proto ||
-        typeof proto.open !== "function" ||
-        typeof proto.send !== "function"
-      )
-        return;
+      if (!proto || typeof proto.open !== 'function' || typeof proto.send !== 'function') return;
 
-      if (!isHookedFunction(proto.open, "__cgNavChatGptXhrOpenHook")) {
+      if (!isHookedFunction(proto.open, '__cgNavChatGptXhrOpenHook')) {
         const originalOpen = proto.open;
 
         const wrappedOpen = function (method, url) {
           try {
-            const requestMethod = String(method || "GET").toUpperCase();
+            const requestMethod = String(method || 'GET').toUpperCase();
             const requestUrl = extractRequestUrl(url);
-            this.__cgNavChatGptLatRequest = isChatGptLatCompletionRequest(
-              requestUrl,
-              requestMethod,
-            );
+            this.__cgNavChatGptLatRequest = isChatGptLatCompletionRequest(requestUrl, requestMethod);
           } catch (_) {
             this.__cgNavChatGptLatRequest = false;
           }
@@ -1286,11 +1626,11 @@
           return originalOpen.apply(this, arguments);
         };
 
-        markHookedFunction(wrappedOpen, "__cgNavChatGptXhrOpenHook");
+        markHookedFunction(wrappedOpen, '__cgNavChatGptXhrOpenHook');
         proto.open = wrappedOpen;
       }
 
-      if (!isHookedFunction(proto.send, "__cgNavChatGptXhrSendHook")) {
+      if (!isHookedFunction(proto.send, '__cgNavChatGptXhrSendHook')) {
         const originalSend = proto.send;
 
         const wrappedSend = function () {
@@ -1301,21 +1641,18 @@
           return originalSend.apply(this, arguments);
         };
 
-        markHookedFunction(wrappedSend, "__cgNavChatGptXhrSendHook");
+        markHookedFunction(wrappedSend, '__cgNavChatGptXhrSendHook');
         proto.send = wrappedSend;
       }
-    } catch (_) {}
+    } catch (_) { }
   }
 
   function startChatGptNetworkMonitor() {
-    if (PLATFORM !== "chatgpt" || STATE.chatgptNetworkMonitor) return;
+    if (PLATFORM !== 'chatgpt' || STATE.chatgptNetworkMonitor) return;
 
     STATE.chatgptNetworkMonitor = window.setInterval(() => {
       const now = Date.now();
-      if (
-        STATE.alarmEnabled &&
-        now - STATE.chatgptNetworkHookRetryAt > CHATGPT_NETWORK_HOOK_RETRY_MS
-      ) {
+      if (STATE.alarmEnabled && now - STATE.chatgptNetworkHookRetryAt > CHATGPT_NETWORK_HOOK_RETRY_MS) {
         STATE.chatgptNetworkHookRetryAt = now;
         initChatGptNetworkHooks();
       }
@@ -1329,17 +1666,14 @@
   }
 
   function registerGeminiNetworkPulse() {
-    if (PLATFORM !== "gemini") return;
+    if (PLATFORM !== 'gemini') return;
     if (!STATE.alarmEnabled) return;
 
     const now = Date.now();
     STATE.geminiNetworkLastPulseAt = now;
     STATE.geminiNetworkPulseCount += 1;
 
-    if (
-      !STATE.geminiNetworkIsGenerating &&
-      STATE.geminiNetworkPulseCount >= GEMINI_NETWORK_BURST_THRESHOLD
-    ) {
+    if (!STATE.geminiNetworkIsGenerating && STATE.geminiNetworkPulseCount >= GEMINI_NETWORK_BURST_THRESHOLD) {
       STATE.geminiNetworkIsGenerating = true;
     }
   }
@@ -1348,8 +1682,7 @@
     const now = Date.now();
 
     // Mantiene el contrato del script dedicado: solo suena/notifica cuando Gemini está en segundo plano.
-    if (PLATFORM !== "gemini" || !STATE.alarmEnabled || !document.hidden)
-      return false;
+    if (PLATFORM !== 'gemini' || !STATE.alarmEnabled || !document.hidden) return false;
     if (now - STATE.lastAlarmAt < ALARM_COOLDOWN_MS) return false;
 
     STATE.lastAlarmAt = now;
@@ -1357,12 +1690,12 @@
     try {
       initAlarmAudio();
 
-      playAppleInspiredChime();
+      playSelectedAlarmTone();
 
-      if (typeof GM_notification === "function") {
+      if (typeof GM_notification === 'function') {
         GM_notification({
-          title: "Gemini",
-          text: "Flujo de red completado.",
+          title: 'Gemini',
+          text: 'Flujo de red completado.',
           timeout: 12000,
           onclick: () => window.focus(),
         });
@@ -1385,7 +1718,7 @@
     } catch (_) {
       try {
         fn[markerName] = true;
-      } catch (_) {}
+      } catch (_) { }
     }
   }
 
@@ -1398,7 +1731,7 @@
   }
 
   function initGeminiNetworkAlarm() {
-    if (PLATFORM !== "gemini") return;
+    if (PLATFORM !== 'gemini') return;
 
     initGeminiNetworkHooks();
     startGeminiNetworkMonitor();
@@ -1407,7 +1740,7 @@
   }
 
   function initGeminiNetworkHooks() {
-    if (PLATFORM !== "gemini") return;
+    if (PLATFORM !== 'gemini') return;
 
     const pageWindow = getUserscriptWindow();
 
@@ -1420,30 +1753,30 @@
       const XHR = pageWindow && pageWindow.XMLHttpRequest;
       const proto = XHR && XHR.prototype;
 
-      if (!proto || typeof proto.open !== "function") return;
-      if (isHookedFunction(proto.open, "__cgNavGeminiXhrOpenHook")) return;
+      if (!proto || typeof proto.open !== 'function') return;
+      if (isHookedFunction(proto.open, '__cgNavGeminiXhrOpenHook')) return;
 
       const originalOpen = proto.open;
 
       const wrappedOpen = function (method, url) {
         if (isGeminiBatchExecuteUrl(extractRequestUrl(url))) {
           try {
-            this.addEventListener("loadstart", registerGeminiNetworkPulse);
-          } catch (_) {}
+            this.addEventListener('loadstart', registerGeminiNetworkPulse);
+          } catch (_) { }
         }
 
         return originalOpen.apply(this, arguments);
       };
 
-      markHookedFunction(wrappedOpen, "__cgNavGeminiXhrOpenHook");
+      markHookedFunction(wrappedOpen, '__cgNavGeminiXhrOpenHook');
       proto.open = wrappedOpen;
-    } catch (_) {}
+    } catch (_) { }
   }
 
   function hookGeminiFetch(pageWindow) {
     try {
-      if (!pageWindow || typeof pageWindow.fetch !== "function") return;
-      if (isHookedFunction(pageWindow.fetch, "__cgNavGeminiFetchHook")) return;
+      if (!pageWindow || typeof pageWindow.fetch !== 'function') return;
+      if (isHookedFunction(pageWindow.fetch, '__cgNavGeminiFetchHook')) return;
 
       const originalFetch = pageWindow.fetch;
 
@@ -1456,13 +1789,13 @@
         return originalFetch.apply(this, args);
       };
 
-      markHookedFunction(wrappedFetch, "__cgNavGeminiFetchHook");
+      markHookedFunction(wrappedFetch, '__cgNavGeminiFetchHook');
       pageWindow.fetch = wrappedFetch;
-    } catch (_) {}
+    } catch (_) { }
   }
 
   function startGeminiNetworkMonitor() {
-    if (PLATFORM !== "gemini" || STATE.geminiNetworkMonitor) return;
+    if (PLATFORM !== 'gemini' || STATE.geminiNetworkMonitor) return;
 
     STATE.geminiNetworkMonitor = window.setInterval(() => {
       const now = Date.now();
@@ -1494,7 +1827,7 @@
   }
 
   function ensureStyles() {
-    if (document.getElementById("__cg_nav_styles")) return;
+    if (document.getElementById('__cg_nav_styles')) return;
 
     const css = `
       html[data-__cg-nav-theme="dark"] {
@@ -1701,6 +2034,57 @@
         accent-color: var(--cg-nav-primary);
         cursor: pointer;
       }
+      .__cg_nav_tone_picker {
+        display: grid;
+        gap: 6px;
+        max-height: 286px;
+        overflow: auto;
+        padding: 6px;
+        border: 1px solid var(--cg-nav-border);
+        border-radius: 12px;
+        background: var(--cg-nav-surface);
+      }
+      .__cg_nav_tone_picker[hidden] {
+        display: none;
+      }
+      #__cg_nav_options_menu button.__cg_nav_tone_option {
+        min-height: 42px;
+        justify-content: flex-start;
+        gap: 8px;
+        text-align: left;
+      }
+      #__cg_nav_options_menu button.__cg_nav_tone_option.__cg_nav_active_tone {
+        background: var(--cg-nav-primary-soft);
+        border-color: rgba(64,92,245,.34);
+      }
+      .__cg_nav_tone_check {
+        width: 14px;
+        min-width: 14px;
+        color: var(--cg-nav-primary);
+        font-weight: 700;
+        text-align: center;
+      }
+      .__cg_nav_tone_text {
+        min-width: 0;
+        display: grid;
+        gap: 2px;
+      }
+      .__cg_nav_tone_name {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--cg-nav-text);
+      }
+      .__cg_nav_tone_hint {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        color: var(--cg-nav-text-soft);
+        font-size: 11px;
+      }
+      #__cg_nav_options_menu button.__cg_nav_tone_preview {
+        justify-content: center;
+      }
       #__cg_prev_btn,
       #__cg_next_btn {
         font-size: 18px;
@@ -1844,11 +2228,12 @@
       }
     `;
 
-    const style = document.createElement("style");
-    style.id = "__cg_nav_styles";
+    const style = document.createElement('style');
+    style.id = '__cg_nav_styles';
     style.textContent = css;
     (document.head || document.documentElement).appendChild(style);
   }
+
 
   function getDefaultPanelPosition(panel) {
     const margin = 18;
@@ -1882,17 +2267,16 @@
   function applyPanelPosition(forceDefault = false) {
     if (!STATE.panel) return;
 
-    let position =
-      !forceDefault && STATE.panelPosition
-        ? STATE.panelPosition
-        : getDefaultPanelPosition(STATE.panel);
+    let position = !forceDefault && STATE.panelPosition
+      ? STATE.panelPosition
+      : getDefaultPanelPosition(STATE.panel);
 
     position = clampPanelPosition(position.left, position.top, STATE.panel);
 
     STATE.panel.style.left = `${position.left}px`;
     STATE.panel.style.top = `${position.top}px`;
-    STATE.panel.style.right = "auto";
-    STATE.panel.style.bottom = "auto";
+    STATE.panel.style.right = 'auto';
+    STATE.panel.style.bottom = 'auto';
 
     savePanelPosition(position);
   }
@@ -1907,7 +2291,7 @@
 
     const target = event.target;
     if (!(target instanceof Element)) return;
-    if (target.closest("button")) return;
+    if (target.closest('button')) return;
 
     const rect = STATE.panel.getBoundingClientRect();
     STATE.drag.active = true;
@@ -1917,50 +2301,39 @@
     STATE.drag.originLeft = rect.left;
     STATE.drag.originTop = rect.top;
 
-    STATE.panel.classList.add("__dragging");
-    document.documentElement.classList.add("__cg_nav_no_select");
+    STATE.panel.classList.add('__dragging');
+    document.documentElement.classList.add('__cg_nav_no_select');
 
     try {
       event.currentTarget.setPointerCapture(event.pointerId);
-    } catch (_) {}
+    } catch (_) { }
 
     event.preventDefault();
   }
 
   function onDragPointerMove(event) {
-    if (
-      !STATE.drag.active ||
-      event.pointerId !== STATE.drag.pointerId ||
-      !STATE.panel
-    )
-      return;
+    if (!STATE.drag.active || event.pointerId !== STATE.drag.pointerId || !STATE.panel) return;
 
-    const nextLeft =
-      STATE.drag.originLeft + (event.clientX - STATE.drag.startX);
+    const nextLeft = STATE.drag.originLeft + (event.clientX - STATE.drag.startX);
     const nextTop = STATE.drag.originTop + (event.clientY - STATE.drag.startY);
     const position = clampPanelPosition(nextLeft, nextTop, STATE.panel);
 
     STATE.panel.style.left = `${position.left}px`;
     STATE.panel.style.top = `${position.top}px`;
-    STATE.panel.style.right = "auto";
-    STATE.panel.style.bottom = "auto";
+    STATE.panel.style.right = 'auto';
+    STATE.panel.style.bottom = 'auto';
   }
 
   function finishPanelDrag(event) {
-    if (
-      !STATE.drag.active ||
-      event.pointerId !== STATE.drag.pointerId ||
-      !STATE.panel
-    )
-      return;
+    if (!STATE.drag.active || event.pointerId !== STATE.drag.pointerId || !STATE.panel) return;
 
     STATE.drag.active = false;
-    STATE.panel.classList.remove("__dragging");
-    document.documentElement.classList.remove("__cg_nav_no_select");
+    STATE.panel.classList.remove('__dragging');
+    document.documentElement.classList.remove('__cg_nav_no_select');
 
     try {
       event.currentTarget.releasePointerCapture(event.pointerId);
-    } catch (_) {}
+    } catch (_) { }
 
     savePanelPosition({
       left: parseFloat(STATE.panel.style.left) || 18,
@@ -1970,30 +2343,31 @@
 
   function bindPanelDrag(handle) {
     if (!handle) return;
-    handle.addEventListener("pointerdown", onDragPointerDown);
-    handle.addEventListener("pointermove", onDragPointerMove);
-    handle.addEventListener("pointerup", finishPanelDrag);
-    handle.addEventListener("pointercancel", finishPanelDrag);
+    handle.addEventListener('pointerdown', onDragPointerDown);
+    handle.addEventListener('pointermove', onDragPointerMove);
+    handle.addEventListener('pointerup', finishPanelDrag);
+    handle.addEventListener('pointercancel', finishPanelDrag);
   }
 
+
   function autoSendNormalizeText(text) {
-    return String(text || "")
-      .replace(/\u00a0/g, " ")
-      .replace(/\s+/g, " ")
+    return String(text || '')
+      .replace(/\u00a0/g, ' ')
+      .replace(/\s+/g, ' ')
       .trim();
   }
 
   function autoSendIsVisible(el) {
     if (!el || !(el instanceof Element)) return false;
-    if (el.closest("#__cg_nav_panel")) return false;
+    if (el.closest('#__cg_nav_panel')) return false;
     const rect = el.getBoundingClientRect();
     const style = getComputedStyle(el);
     return (
-      style.display !== "none" &&
-      style.visibility !== "hidden" &&
-      style.opacity !== "0" &&
-      rect.width > 0 &&
-      rect.height > 0
+      style.display !== 'none'
+      && style.visibility !== 'hidden'
+      && style.opacity !== '0'
+      && rect.width > 0
+      && rect.height > 0
     );
   }
 
@@ -2001,98 +2375,90 @@
     if (!el) return true;
     const style = getComputedStyle(el);
     return (
-      el.disabled === true ||
-      el.hasAttribute("disabled") ||
-      el.getAttribute("aria-disabled") === "true" ||
-      el.getAttribute("data-disabled") === "true" ||
-      style.pointerEvents === "none"
+      el.disabled === true
+      || el.hasAttribute('disabled')
+      || el.getAttribute('aria-disabled') === 'true'
+      || el.getAttribute('data-disabled') === 'true'
+      || style.pointerEvents === 'none'
     );
   }
 
   function autoSendGetShortText(el) {
     const text = autoSendNormalizeText(el.textContent);
-    return text.length <= 36 ? text : "";
+    return text.length <= 36 ? text : '';
   }
 
   function autoSendAriaDescribedText(el) {
-    const ids = autoSendNormalizeText(el.getAttribute("aria-describedby"))
-      .split(" ")
+    const ids = autoSendNormalizeText(el.getAttribute('aria-describedby'))
+      .split(' ')
       .filter(Boolean);
 
     return ids
-      .map((id) => document.getElementById(id)?.textContent || "")
-      .join(" ");
+      .map((id) => document.getElementById(id)?.textContent || '')
+      .join(' ');
   }
 
   function autoSendElementLabel(el) {
-    if (!el) return "";
+    if (!el) return '';
     return autoSendNormalizeText(
       [
-        el.getAttribute("aria-label"),
-        el.getAttribute("title"),
-        el.getAttribute("data-testid"),
-        el.getAttribute("data-state"),
+        el.getAttribute('aria-label'),
+        el.getAttribute('title'),
+        el.getAttribute('data-testid'),
+        el.getAttribute('data-state'),
         autoSendAriaDescribedText(el),
         autoSendGetShortText(el),
       ]
         .filter(Boolean)
-        .join(" "),
+        .join(' '),
     );
   }
 
   function autoSendFullElementText(el) {
-    if (!el) return "";
+    if (!el) return '';
     return autoSendNormalizeText(
       [
-        el.getAttribute("download"),
-        el.getAttribute("aria-label"),
-        el.getAttribute("title"),
+        el.getAttribute('download'),
+        el.getAttribute('aria-label'),
+        el.getAttribute('title'),
         el.textContent,
-        el.getAttribute("href"),
+        el.getAttribute('href'),
       ]
         .filter(Boolean)
-        .join(" "),
+        .join(' '),
     );
   }
 
   function autoSendFindPromptInput() {
     const selectors = [
-      "#prompt-textarea",
-      "textarea#prompt-textarea",
+      '#prompt-textarea',
+      'textarea#prompt-textarea',
       'textarea[data-testid*="prompt"]',
       'div[data-testid="composer"] textarea',
       '[contenteditable="true"][role="textbox"]',
       '[contenteditable="plaintext-only"][role="textbox"]',
       '[contenteditable="true"][data-testid*="prompt"]',
       'main [role="textbox"][contenteditable="true"]',
-      "textarea",
+      'textarea',
       '[role="textbox"]',
     ];
 
     const candidates = [
-      ...new Set(
-        selectors.flatMap((sel) => [...document.querySelectorAll(sel)]),
-      ),
+      ...new Set(selectors.flatMap((sel) => [...document.querySelectorAll(sel)])),
     ]
       .filter(autoSendIsVisible)
       .filter((el) => !el.closest('[aria-hidden="true"]'))
-      .filter((el) => !el.closest("article, [data-message-author-role]"));
+      .filter((el) => !el.closest('article, [data-message-author-role]'));
 
     candidates.sort((a, b) => {
       const ar = a.getBoundingClientRect();
       const br = b.getBoundingClientRect();
       let as = ar.bottom;
       let bs = br.bottom;
-      if ((a.id || "").toLowerCase() === "prompt-textarea") as += 900;
-      if ((b.id || "").toLowerCase() === "prompt-textarea") bs += 900;
-      if (
-        (a.getAttribute("data-testid") || "").toLowerCase().includes("prompt")
-      )
-        as += 300;
-      if (
-        (b.getAttribute("data-testid") || "").toLowerCase().includes("prompt")
-      )
-        bs += 300;
+      if ((a.id || '').toLowerCase() === 'prompt-textarea') as += 900;
+      if ((b.id || '').toLowerCase() === 'prompt-textarea') bs += 900;
+      if ((a.getAttribute('data-testid') || '').toLowerCase().includes('prompt')) as += 300;
+      if ((b.getAttribute('data-testid') || '').toLowerCase().includes('prompt')) bs += 300;
       return bs - as;
     });
 
@@ -2102,30 +2468,24 @@
   function autoSendFindComposerRoot(input) {
     if (!input) return null;
 
-    const direct = input.closest(
-      'form, [data-testid="composer"], [data-testid*="composer"]',
-    );
+    const direct = input.closest('form, [data-testid="composer"], [data-testid*="composer"]');
     if (direct && autoSendIsVisible(direct)) return direct;
 
     let node = input.parentElement;
-    for (
-      let depth = 0;
-      node && depth < 10;
-      depth += 1, node = node.parentElement
-    ) {
-      if (node.closest("article, [data-message-author-role]")) break;
-      const buttons = node.querySelectorAll("button");
+    for (let depth = 0; node && depth < 10; depth += 1, node = node.parentElement) {
+      if (node.closest('article, [data-message-author-role]')) break;
+      const buttons = node.querySelectorAll('button');
       if (
-        buttons.length &&
-        [...buttons].some((btn) => {
-          const testId = (btn.getAttribute("data-testid") || "").toLowerCase();
-          const type = (btn.getAttribute("type") || "").toLowerCase();
+        buttons.length
+        && [...buttons].some((btn) => {
+          const testId = (btn.getAttribute('data-testid') || '').toLowerCase();
+          const type = (btn.getAttribute('type') || '').toLowerCase();
           const label = autoSendElementLabel(btn);
           return (
-            testId.includes("send") ||
-            type === "submit" ||
-            AUTO_SEND_RE.test(label) ||
-            AUTO_SEND_PENDING_RE.test(label)
+            testId.includes('send')
+            || type === 'submit'
+            || AUTO_SEND_RE.test(label)
+            || AUTO_SEND_PENDING_RE.test(label)
           );
         })
       ) {
@@ -2138,46 +2498,46 @@
 
   function autoSendIsDownloadElement(el) {
     if (!el) return false;
-    if (el.matches("a[href], a[download]")) return true;
-    if (el.closest("a[href], a[download]")) return true;
+    if (el.matches('a[href], a[download]')) return true;
+    if (el.closest('a[href], a[download]')) return true;
     const text = autoSendFullElementText(el);
     return (
-      AUTO_SEND_FILE_EXT_RE.test(text) ||
-      (AUTO_SEND_DOWNLOAD_HINT_RE.test(text) &&
-        /\.(?:js|txt|pdf|docx|xlsx|pptx|zip|csv|json|md)\b/i.test(text))
+      AUTO_SEND_FILE_EXT_RE.test(text)
+      || (AUTO_SEND_DOWNLOAD_HINT_RE.test(text)
+        && /\.(?:js|txt|pdf|docx|xlsx|pptx|zip|csv|json|md)\b/i.test(text))
     );
   }
 
   function autoSendIsConversationArea(el) {
-    return !!el.closest("article, [data-message-author-role], main");
+    return !!el.closest('article, [data-message-author-role], main');
   }
 
   function autoSendLooksLikeComposerSendButton(btn, composerRoot) {
-    if (!btn || btn.tagName !== "BUTTON") return false;
+    if (!btn || btn.tagName !== 'BUTTON') return false;
     if (!composerRoot || !composerRoot.contains(btn)) return false;
-    if (btn.closest("#__cg_nav_panel")) return false;
-    if (btn.closest("article, [data-message-author-role]")) return false;
+    if (btn.closest('#__cg_nav_panel')) return false;
+    if (btn.closest('article, [data-message-author-role]')) return false;
     if (autoSendIsDownloadElement(btn)) return false;
 
-    const testId = (btn.getAttribute("data-testid") || "").toLowerCase();
-    const type = (btn.getAttribute("type") || "").toLowerCase();
+    const testId = (btn.getAttribute('data-testid') || '').toLowerCase();
+    const type = (btn.getAttribute('type') || '').toLowerCase();
     const aria = autoSendNormalizeText(
       [
-        btn.getAttribute("aria-label"),
-        btn.getAttribute("title"),
-        btn.getAttribute("data-testid"),
-        btn.getAttribute("data-state"),
+        btn.getAttribute('aria-label'),
+        btn.getAttribute('title'),
+        btn.getAttribute('data-testid'),
+        btn.getAttribute('data-state'),
         autoSendAriaDescribedText(btn),
       ]
         .filter(Boolean)
-        .join(" "),
+        .join(' '),
     );
 
     if (AUTO_SEND_STOP_RE.test(aria)) return false;
-    if (testId === "send-button") return true;
-    if (testId.includes("send-button")) return true;
-    if (testId.includes("composer-submit")) return true;
-    if (type === "submit") return true;
+    if (testId === 'send-button') return true;
+    if (testId.includes('send-button')) return true;
+    if (testId.includes('composer-submit')) return true;
+    if (type === 'submit') return true;
     if (AUTO_SEND_PENDING_RE.test(aria)) return true;
     if (AUTO_SEND_RE.test(aria)) return true;
 
@@ -2186,23 +2546,18 @@
 
   function autoSendScoreComposerSendButton(btn, input, composerRoot) {
     const rect = btn.getBoundingClientRect();
-    const testId = (btn.getAttribute("data-testid") || "").toLowerCase();
-    const type = (btn.getAttribute("type") || "").toLowerCase();
+    const testId = (btn.getAttribute('data-testid') || '').toLowerCase();
+    const type = (btn.getAttribute('type') || '').toLowerCase();
     const label = autoSendElementLabel(btn);
     let score = 0;
 
-    if (testId === "send-button") score += 2000;
-    if (testId.includes("send-button")) score += 1500;
-    if (testId.includes("composer-submit")) score += 1000;
-    if (type === "submit") score += 700;
+    if (testId === 'send-button') score += 2000;
+    if (testId.includes('send-button')) score += 1500;
+    if (testId.includes('composer-submit')) score += 1000;
+    if (type === 'submit') score += 700;
     if (AUTO_SEND_PENDING_RE.test(label)) score += 450;
     if (AUTO_SEND_RE.test(label)) score += 350;
-    if (
-      input &&
-      btn.closest("form") &&
-      input.closest("form") === btn.closest("form")
-    )
-      score += 600;
+    if (input && btn.closest('form') && input.closest('form') === btn.closest('form')) score += 600;
     if (composerRoot && composerRoot.contains(btn)) score += 500;
     if (rect.right > window.innerWidth * 0.5) score += 60;
     if (rect.bottom > window.innerHeight * 0.45) score += 60;
@@ -2218,26 +2573,25 @@
     const composerRoot = autoSendFindComposerRoot(input);
     if (!composerRoot) return null;
 
-    const buttons = [...composerRoot.querySelectorAll("button")]
+    const buttons = [...composerRoot.querySelectorAll('button')]
       .filter(autoSendIsVisible)
       .filter((btn) => autoSendLooksLikeComposerSendButton(btn, composerRoot));
 
     if (!buttons.length) return null;
 
     buttons.sort(
-      (a, b) =>
-        autoSendScoreComposerSendButton(b, input, composerRoot) -
-        autoSendScoreComposerSendButton(a, input, composerRoot),
+      (a, b) => autoSendScoreComposerSendButton(b, input, composerRoot)
+        - autoSendScoreComposerSendButton(a, input, composerRoot),
     );
     return buttons[0] || null;
   }
 
   function autoSendGetReadiness() {
-    if (PLATFORM !== "chatgpt") {
+    if (PLATFORM !== 'chatgpt') {
       return {
         ready: false,
         button: null,
-        message: "Auto envío disponible solo en ChatGPT.",
+        message: 'Auto envío disponible solo en ChatGPT.',
       };
     }
 
@@ -2246,7 +2600,7 @@
       return {
         ready: false,
         button: null,
-        message: "Esperando: no encontré el cuadro de texto del compositor.",
+        message: 'Esperando: no encontré el cuadro de texto del compositor.',
       };
     }
 
@@ -2255,8 +2609,7 @@
       return {
         ready: false,
         button: null,
-        message:
-          "Esperando: no encontré un botón de envío dentro del compositor.",
+        message: 'Esperando: no encontré un botón de envío dentro del compositor.',
       };
     }
 
@@ -2265,7 +2618,7 @@
       return {
         ready: false,
         button: btn,
-        message: "Esperando: ChatGPT todavía indica File Upload Pending.",
+        message: 'Esperando: ChatGPT todavía indica File Upload Pending.',
       };
     }
 
@@ -2273,23 +2626,19 @@
       return {
         ready: false,
         button: btn,
-        message:
-          "Esperando: el chat parece estar generando o el botón actual no es de envío.",
+        message: 'Esperando: el chat parece estar generando o el botón actual no es de envío.',
       };
     }
 
     if (
-      autoSendIsDownloadElement(btn) ||
-      (autoSendIsConversationArea(btn) &&
-        !btn.closest(
-          'form, [data-testid="composer"], [data-testid*="composer"]',
-        ))
+      autoSendIsDownloadElement(btn)
+      || (autoSendIsConversationArea(btn)
+        && !btn.closest('form, [data-testid="composer"], [data-testid*="composer"]'))
     ) {
       return {
         ready: false,
         button: null,
-        message:
-          "Bloqueado: el candidato detectado no pertenece al compositor.",
+        message: 'Bloqueado: el candidato detectado no pertenece al compositor.',
       };
     }
 
@@ -2297,20 +2646,19 @@
       return {
         ready: false,
         button: btn,
-        message:
-          "Esperando: el botón de envío existe, pero aún está deshabilitado.",
+        message: 'Esperando: el botón de envío existe, pero aún está deshabilitado.',
       };
     }
 
     return {
       ready: true,
       button: btn,
-      message: "Listo: el botón de envío del compositor está habilitado.",
+      message: 'Listo: el botón de envío del compositor está habilitado.',
     };
   }
 
   function autoSendSetStatus(text) {
-    STATE.autoSendLastStatus = text || "Auto enviar al estar listo.";
+    STATE.autoSendLastStatus = text || 'Auto enviar al estar listo.';
     refreshAutoSendControls();
   }
 
@@ -2332,10 +2680,7 @@
   function scheduleAutoSendCheck() {
     if (!STATE.autoSendArmed || STATE.autoSendSent) return;
     if (STATE.autoSendDebounceTimer) clearTimeout(STATE.autoSendDebounceTimer);
-    STATE.autoSendDebounceTimer = setTimeout(
-      checkAutoSend,
-      AUTO_SEND_DEBOUNCE_MS,
-    );
+    STATE.autoSendDebounceTimer = setTimeout(checkAutoSend, AUTO_SEND_DEBOUNCE_MS);
   }
 
   function clickSendOnce() {
@@ -2347,17 +2692,17 @@
     }
 
     STATE.autoSendSent = true;
-    autoSendSetStatus("Enviando solicitud desde el compositor...");
+    autoSendSetStatus('Enviando solicitud desde el compositor...');
 
     try {
-      fresh.button.scrollIntoView({ block: "nearest", inline: "nearest" });
-    } catch (_) {}
+      fresh.button.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    } catch (_) { }
 
     fresh.button.click();
 
     STATE.autoSendArmed = false;
     stopAutoSendWatching();
-    autoSendSetStatus("Solicitud enviada. Auto envío desactivado.");
+    autoSendSetStatus('Solicitud enviada. Auto envío desactivado.');
   }
 
   function checkAutoSend() {
@@ -2378,36 +2723,31 @@
       characterData: true,
       attributes: true,
       attributeFilter: [
-        "disabled",
-        "aria-disabled",
-        "aria-label",
-        "title",
-        "data-testid",
-        "data-state",
-        "class",
-        "href",
-        "download",
+        'disabled',
+        'aria-disabled',
+        'aria-label',
+        'title',
+        'data-testid',
+        'data-state',
+        'class',
+        'href',
+        'download',
       ],
     });
 
-    STATE.autoSendPollTimer = setInterval(
-      checkAutoSend,
-      AUTO_SEND_CHECK_EVERY_MS,
-    );
+    STATE.autoSendPollTimer = setInterval(checkAutoSend, AUTO_SEND_CHECK_EVERY_MS);
     checkAutoSend();
   }
 
   function armAutoSend() {
-    if (PLATFORM !== "chatgpt") {
-      autoSendSetStatus("Auto envío disponible solo en ChatGPT.");
+    if (PLATFORM !== 'chatgpt') {
+      autoSendSetStatus('Auto envío disponible solo en ChatGPT.');
       return;
     }
 
     STATE.autoSendArmed = true;
     STATE.autoSendSent = false;
-    autoSendSetStatus(
-      "Auto envío armado. Solo se aceptará el botón de envío dentro del compositor.",
-    );
+    autoSendSetStatus('Auto envío armado. Solo se aceptará el botón de envío dentro del compositor.');
     startAutoSendWatching();
   }
 
@@ -2415,7 +2755,7 @@
     STATE.autoSendArmed = false;
     STATE.autoSendSent = false;
     stopAutoSendWatching();
-    autoSendSetStatus("Auto envío cancelado.");
+    autoSendSetStatus('Auto envío cancelado.');
   }
 
   function toggleAutoSend() {
@@ -2433,66 +2773,54 @@
   }
 
   function createAutoSendButton() {
-    const autoSendBtn = document.createElement("button");
-    autoSendBtn.id = "__cg_auto_send_btn";
-    autoSendBtn.type = "button";
-    autoSendBtn.dataset.role = "__cg_nav_auto_send_toggle";
+    const autoSendBtn = document.createElement('button');
+    autoSendBtn.id = '__cg_auto_send_btn';
+    autoSendBtn.type = 'button';
+    autoSendBtn.dataset.role = '__cg_nav_auto_send_toggle';
     setSafeInnerHTML(autoSendBtn, getAutoSendIconSvg());
-    autoSendBtn.addEventListener("click", toggleAutoSend);
+    autoSendBtn.addEventListener('click', toggleAutoSend);
     return autoSendBtn;
   }
 
   function ensureAutoSendPanelButton() {
     if (!STATE.panel) return;
-    if (STATE.panel.querySelector("#__cg_auto_send_btn")) return;
+    if (STATE.panel.querySelector('#__cg_auto_send_btn')) return;
 
     const autoSendBtn = createAutoSendButton();
-    const listBtn = STATE.panel.querySelector("#__cg_list_btn");
+    const listBtn = STATE.panel.querySelector('#__cg_list_btn');
     STATE.panel.insertBefore(autoSendBtn, listBtn || null);
     refreshAutoSendControls();
   }
 
   function refreshAutoSendControls() {
-    const controls = document.querySelectorAll(
-      '[data-role="__cg_nav_auto_send_toggle"]',
-    );
+    const controls = document.querySelectorAll('[data-role="__cg_nav_auto_send_toggle"]');
     controls.forEach((button) => {
       const active = STATE.autoSendArmed;
-      const unsupported = PLATFORM !== "chatgpt";
-      button.classList.toggle(
-        "__cg_nav_auto_send_active",
-        active && !unsupported,
-      );
-      button.setAttribute(
-        "aria-pressed",
-        active && !unsupported ? "true" : "false",
-      );
+      const unsupported = PLATFORM !== 'chatgpt';
+      button.classList.toggle('__cg_nav_auto_send_active', active && !unsupported);
+      button.setAttribute('aria-pressed', active && !unsupported ? 'true' : 'false');
       button.disabled = unsupported;
 
       if (unsupported) {
-        button.setAttribute(
-          "aria-label",
-          "Auto enviar disponible solo en ChatGPT",
-        );
-        button.title = "Auto enviar disponible solo en ChatGPT";
+        button.setAttribute('aria-label', 'Auto enviar disponible solo en ChatGPT');
+        button.title = 'Auto enviar disponible solo en ChatGPT';
         return;
       }
 
       button.setAttribute(
-        "aria-label",
-        active
-          ? "Auto enviar al estar listo activado"
-          : "Auto enviar al estar listo desactivado",
+        'aria-label',
+        active ? 'Auto enviar al estar listo activado' : 'Auto enviar al estar listo desactivado',
       );
       button.title = active
         ? `Auto enviar activado. Click para cancelar. ${STATE.autoSendLastStatus}`
-        : "Auto enviar al estar listo. Click para activar.";
+        : 'Auto enviar al estar listo. Click para activar.';
     });
   }
 
+
   function buildPanel() {
-    if (document.getElementById("__cg_nav_panel")) {
-      STATE.panel = document.getElementById("__cg_nav_panel");
+    if (document.getElementById('__cg_nav_panel')) {
+      STATE.panel = document.getElementById('__cg_nav_panel');
       ensureAutoSendPanelButton();
       refreshThemeControls();
       refreshAlarmControls();
@@ -2500,45 +2828,45 @@
       return;
     }
 
-    const panel = document.createElement("div");
-    panel.id = "__cg_nav_panel";
+    const panel = document.createElement('div');
+    panel.id = '__cg_nav_panel';
 
-    const dragHandle = document.createElement("div");
-    dragHandle.id = "__cg_nav_drag";
-    dragHandle.title = "Arrastra para mover.";
+    const dragHandle = document.createElement('div');
+    dragHandle.id = '__cg_nav_drag';
+    dragHandle.title = 'Arrastra para mover.';
     setSafeInnerHTML(dragHandle, getDragIconSvg());
 
-    const prevBtn = document.createElement("button");
-    prevBtn.id = "__cg_prev_btn";
-    prevBtn.type = "button";
-    prevBtn.textContent = "←";
-    prevBtn.title = "Anterior";
-    prevBtn.setAttribute("aria-label", "Anterior");
+    const prevBtn = document.createElement('button');
+    prevBtn.id = '__cg_prev_btn';
+    prevBtn.type = 'button';
+    prevBtn.textContent = '←';
+    prevBtn.title = 'Anterior';
+    prevBtn.setAttribute('aria-label', 'Anterior');
 
-    const counter = document.createElement("div");
-    counter.id = "__cg_nav_counter";
-    counter.textContent = "0 / 0";
+    const counter = document.createElement('div');
+    counter.id = '__cg_nav_counter';
+    counter.textContent = '0 / 0';
 
-    const nextBtn = document.createElement("button");
-    nextBtn.id = "__cg_next_btn";
-    nextBtn.type = "button";
-    nextBtn.textContent = "→";
-    nextBtn.title = "Siguiente";
-    nextBtn.setAttribute("aria-label", "Siguiente");
+    const nextBtn = document.createElement('button');
+    nextBtn.id = '__cg_next_btn';
+    nextBtn.type = 'button';
+    nextBtn.textContent = '→';
+    nextBtn.title = 'Siguiente';
+    nextBtn.setAttribute('aria-label', 'Siguiente');
 
     const autoSendBtn = createAutoSendButton();
 
-    const listBtn = document.createElement("button");
-    listBtn.id = "__cg_list_btn";
-    listBtn.type = "button";
-    listBtn.className = "__cg_nav_primary";
-    listBtn.title = "Abrir menú";
-    listBtn.setAttribute("aria-label", "Abrir menú");
+    const listBtn = document.createElement('button');
+    listBtn.id = '__cg_list_btn';
+    listBtn.type = 'button';
+    listBtn.className = '__cg_nav_primary';
+    listBtn.title = 'Abrir menú';
+    listBtn.setAttribute('aria-label', 'Abrir menú');
     setSafeInnerHTML(listBtn, getListIconSvg());
 
-    prevBtn.addEventListener("click", goPrev);
-    nextBtn.addEventListener("click", goNext);
-    listBtn.addEventListener("click", toggleOptionsMenu);
+    prevBtn.addEventListener('click', goPrev);
+    nextBtn.addEventListener('click', goNext);
+    listBtn.addEventListener('click', toggleOptionsMenu);
 
     panel.appendChild(dragHandle);
     panel.appendChild(prevBtn);
@@ -2561,22 +2889,19 @@
     });
   }
 
+
   function refreshPanelState() {
     const panel = STATE.panel;
     if (!panel) return;
 
-    const prev = panel.querySelector("#__cg_prev_btn");
-    const next = panel.querySelector("#__cg_next_btn");
-    const counter = panel.querySelector("#__cg_nav_counter");
+    const prev = panel.querySelector('#__cg_prev_btn');
+    const next = panel.querySelector('#__cg_next_btn');
+    const counter = panel.querySelector('#__cg_nav_counter');
 
     const hasItems = STATE.items.length > 0;
     if (prev) prev.disabled = !hasItems || STATE.currentIndex <= 0;
-    if (next)
-      next.disabled = !hasItems || STATE.currentIndex >= STATE.items.length - 1;
-    if (counter)
-      counter.textContent = hasItems
-        ? `${STATE.currentIndex + 1} / ${STATE.items.length}`
-        : "0 / 0";
+    if (next) next.disabled = !hasItems || STATE.currentIndex >= STATE.items.length - 1;
+    if (counter) counter.textContent = hasItems ? `${STATE.currentIndex + 1} / ${STATE.items.length}` : '0 / 0';
     refreshAlarmControls();
     refreshAutoSendControls();
   }
@@ -2585,23 +2910,19 @@
     if (!STATE.optionsMenu) return;
     STATE.optionsMenu.remove();
     STATE.optionsMenu = null;
-    document.removeEventListener("click", handleOptionsMenuOutsideClick, true);
-    document.removeEventListener("keydown", handleOptionsMenuKeydown, true);
+    document.removeEventListener('click', handleOptionsMenuOutsideClick, true);
+    document.removeEventListener('keydown', handleOptionsMenuKeydown, true);
   }
 
   function handleOptionsMenuOutsideClick(event) {
     if (!STATE.optionsMenu) return;
     if (STATE.optionsMenu.contains(event.target)) return;
-    if (
-      STATE.panel &&
-      STATE.panel.querySelector("#__cg_list_btn")?.contains(event.target)
-    )
-      return;
+    if (STATE.panel && STATE.panel.querySelector('#__cg_list_btn')?.contains(event.target)) return;
     closeOptionsMenu();
   }
 
   function handleOptionsMenuKeydown(event) {
-    if (event.key === "Escape") closeOptionsMenu();
+    if (event.key === 'Escape') closeOptionsMenu();
   }
 
   function toggleOptionsMenu(event) {
@@ -2614,73 +2935,108 @@
 
     if (!STATE.panel) return;
 
-    const menu = document.createElement("div");
-    menu.id = "__cg_nav_options_menu";
-    menu.setAttribute("role", "menu");
-    menu.addEventListener("click", (menuEvent) => menuEvent.stopPropagation());
+    const menu = document.createElement('div');
+    menu.id = '__cg_nav_options_menu';
+    menu.setAttribute('role', 'menu');
+    menu.addEventListener('click', (menuEvent) => menuEvent.stopPropagation());
 
-    const openListBtn = document.createElement("button");
-    openListBtn.type = "button";
-    openListBtn.className = "__cg_nav_menu_row";
-    openListBtn.setAttribute("role", "menuitem");
-    setSafeInnerHTML(
-      openListBtn,
-      `
+    const openListBtn = document.createElement('button');
+    openListBtn.type = 'button';
+    openListBtn.className = '__cg_nav_menu_row';
+    openListBtn.setAttribute('role', 'menuitem');
+    setSafeInnerHTML(openListBtn, `
       <span class="__cg_nav_menu_label">
         ${getListIconSvg()}
         <span>Abrir lista</span>
       </span>
       <span class="__cg_nav_menu_value">↗</span>
-    `,
-    );
-    openListBtn.addEventListener("click", () => {
+    `);
+    openListBtn.addEventListener('click', () => {
       closeOptionsMenu();
       openListModal();
     });
 
-    const themeBtn = document.createElement("button");
-    themeBtn.type = "button";
-    themeBtn.dataset.role = "__cg_nav_theme_toggle";
-    themeBtn.dataset.display = "__cg_nav_menu";
-    themeBtn.className = "__cg_nav_menu_row";
-    themeBtn.setAttribute("role", "menuitem");
-    themeBtn.addEventListener("click", cycleThemeMode);
+    const themeBtn = document.createElement('button');
+    themeBtn.type = 'button';
+    themeBtn.dataset.role = '__cg_nav_theme_toggle';
+    themeBtn.dataset.display = '__cg_nav_menu';
+    themeBtn.className = '__cg_nav_menu_row';
+    themeBtn.setAttribute('role', 'menuitem');
+    themeBtn.addEventListener('click', cycleThemeMode);
 
-    const alarmBtn = document.createElement("button");
-    alarmBtn.type = "button";
-    alarmBtn.dataset.role = "__cg_nav_alarm_toggle";
-    alarmBtn.dataset.display = "__cg_nav_menu";
-    alarmBtn.className = STATE.alarmEnabled
-      ? "__cg_nav_menu_row __cg_nav_primary"
-      : "__cg_nav_menu_row";
-    alarmBtn.setAttribute("role", "menuitem");
-    alarmBtn.addEventListener("click", toggleAlarmEnabled);
+    const alarmBtn = document.createElement('button');
+    alarmBtn.type = 'button';
+    alarmBtn.dataset.role = '__cg_nav_alarm_toggle';
+    alarmBtn.dataset.display = '__cg_nav_menu';
+    alarmBtn.className = STATE.alarmEnabled ? '__cg_nav_menu_row __cg_nav_primary' : '__cg_nav_menu_row';
+    alarmBtn.setAttribute('role', 'menuitem');
+    alarmBtn.addEventListener('click', toggleAlarmEnabled);
 
-    const volumeRow = document.createElement("div");
-    volumeRow.className = "__cg_nav_menu_volume";
+    const alarmToneBtn = document.createElement('button');
+    alarmToneBtn.type = 'button';
+    alarmToneBtn.dataset.role = '__cg_nav_alarm_tone_toggle';
+    alarmToneBtn.dataset.display = '__cg_nav_menu';
+    alarmToneBtn.className = '__cg_nav_menu_row';
+    alarmToneBtn.setAttribute('role', 'menuitem');
 
-    const volumeLabel = document.createElement("span");
-    volumeLabel.className = "__cg_nav_menu_label";
-    volumeLabel.textContent = "Volumen";
+    const tonePicker = document.createElement('div');
+    tonePicker.id = '__cg_nav_alarm_tone_picker';
+    tonePicker.className = '__cg_nav_tone_picker';
+    tonePicker.hidden = true;
 
-    const volumeInput = document.createElement("input");
-    volumeInput.type = "range";
+    alarmToneBtn.addEventListener('click', () => {
+      tonePicker.hidden = !tonePicker.hidden;
+      refreshAlarmToneControls();
+    });
+
+    ALARM_TONES.forEach((tone) => {
+      const toneOption = document.createElement('button');
+      toneOption.type = 'button';
+      toneOption.className = '__cg_nav_tone_option';
+      toneOption.dataset.role = '__cg_nav_alarm_tone_option';
+      toneOption.dataset.toneId = tone.id;
+      toneOption.setAttribute('role', 'menuitemradio');
+      toneOption.addEventListener('click', () => {
+        setAlarmTone(tone.id);
+      });
+      tonePicker.appendChild(toneOption);
+    });
+
+    const tonePreviewBtn = document.createElement('button');
+    tonePreviewBtn.type = 'button';
+    tonePreviewBtn.className = '__cg_nav_tone_preview';
+    tonePreviewBtn.dataset.role = '__cg_nav_alarm_tone_preview';
+    tonePreviewBtn.setAttribute('role', 'menuitem');
+    tonePreviewBtn.addEventListener('click', () => {
+      playSelectedAlarmTone();
+    });
+    tonePicker.appendChild(tonePreviewBtn);
+
+    const volumeRow = document.createElement('div');
+    volumeRow.className = '__cg_nav_menu_volume';
+
+    const volumeLabel = document.createElement('span');
+    volumeLabel.className = '__cg_nav_menu_label';
+    volumeLabel.textContent = 'Volumen';
+
+    const volumeInput = document.createElement('input');
+    volumeInput.type = 'range';
     volumeInput.min = String(Math.round(ALARM_VOLUME_MIN * 100));
     volumeInput.max = String(Math.round(ALARM_VOLUME_MAX * 100));
-    volumeInput.step = "1";
+    volumeInput.step = '1';
     volumeInput.value = String(Math.round(STATE.alarmVolume * 100));
-    volumeInput.dataset.role = "__cg_nav_alarm_volume";
-    volumeInput.addEventListener("input", () => {
+    volumeInput.dataset.role = '__cg_nav_alarm_volume';
+    volumeInput.addEventListener('input', () => {
       setAlarmVolume(Number(volumeInput.value) / 100);
     });
 
-    const volumeValue = document.createElement("span");
-    volumeValue.className = "__cg_nav_menu_value";
-    volumeValue.dataset.role = "__cg_nav_alarm_volume_value";
+    const volumeValue = document.createElement('span');
+    volumeValue.className = '__cg_nav_menu_value';
+    volumeValue.dataset.role = '__cg_nav_alarm_volume_value';
     volumeValue.textContent = `${getAlarmVolumePercent()}%`;
 
-    const volumeControl = document.createElement("span");
-    volumeControl.className = "__cg_nav_menu_label";
+    const volumeControl = document.createElement('span');
+    volumeControl.className = '__cg_nav_menu_label';
     volumeControl.appendChild(volumeInput);
     volumeControl.appendChild(volumeValue);
 
@@ -2690,6 +3046,8 @@
     menu.appendChild(openListBtn);
     menu.appendChild(themeBtn);
     menu.appendChild(alarmBtn);
+    menu.appendChild(alarmToneBtn);
+    menu.appendChild(tonePicker);
     menu.appendChild(volumeRow);
 
     STATE.panel.appendChild(menu);
@@ -2698,10 +3056,11 @@
     refreshThemeControls();
     refreshAlarmControls();
     refreshAlarmVolumeControls();
+    refreshAlarmToneControls();
 
     setTimeout(() => {
-      document.addEventListener("click", handleOptionsMenuOutsideClick, true);
-      document.addEventListener("keydown", handleOptionsMenuKeydown, true);
+      document.addEventListener('click', handleOptionsMenuOutsideClick, true);
+      document.addEventListener('keydown', handleOptionsMenuKeydown, true);
     }, 0);
   }
 
@@ -2714,73 +3073,73 @@
       return;
     }
 
-    const overlay = document.createElement("div");
-    overlay.id = "__cg_nav_modal";
+    const overlay = document.createElement('div');
+    overlay.id = '__cg_nav_modal';
 
-    const box = document.createElement("div");
-    box.id = "__cg_nav_modal_box";
+    const box = document.createElement('div');
+    box.id = '__cg_nav_modal_box';
 
-    const header = document.createElement("div");
-    header.id = "__cg_nav_modal_header";
+    const header = document.createElement('div');
+    header.id = '__cg_nav_modal_header';
 
-    const headerLeft = document.createElement("div");
-    headerLeft.id = "__cg_nav_modal_header_left";
+    const headerLeft = document.createElement('div');
+    headerLeft.id = '__cg_nav_modal_header_left';
 
-    const title = document.createElement("strong");
-    title.textContent = "Conversación";
+    const title = document.createElement('strong');
+    title.textContent = 'Conversación';
 
     headerLeft.appendChild(title);
 
-    const headerRight = document.createElement("div");
-    headerRight.id = "__cg_nav_modal_header_right";
+    const headerRight = document.createElement('div');
+    headerRight.id = '__cg_nav_modal_header_right';
 
-    const closeBtn = document.createElement("button");
-    closeBtn.id = "__cg_nav_close";
-    closeBtn.type = "button";
-    closeBtn.textContent = "Cerrar";
+    const closeBtn = document.createElement('button');
+    closeBtn.id = '__cg_nav_close';
+    closeBtn.type = 'button';
+    closeBtn.textContent = 'Cerrar';
 
     headerRight.appendChild(closeBtn);
 
     header.appendChild(headerLeft);
     header.appendChild(headerRight);
 
-    const filters = document.createElement("div");
-    filters.id = "__cg_nav_filters";
+    const filters = document.createElement('div');
+    filters.id = '__cg_nav_filters';
 
-    const allBtn = document.createElement("button");
-    allBtn.type = "button";
-    allBtn.dataset.filter = "all";
-    allBtn.textContent = "Todos";
+    const allBtn = document.createElement('button');
+    allBtn.type = 'button';
+    allBtn.dataset.filter = 'all';
+    allBtn.textContent = 'Todos';
 
-    const userBtn = document.createElement("button");
-    userBtn.type = "button";
-    userBtn.dataset.filter = "user";
-    userBtn.textContent = "Prompt de usuario";
+    const userBtn = document.createElement('button');
+    userBtn.type = 'button';
+    userBtn.dataset.filter = 'user';
+    userBtn.textContent = 'Prompt de usuario';
 
-    const aiBtn = document.createElement("button");
-    aiBtn.type = "button";
-    aiBtn.dataset.filter = "ai";
-    aiBtn.textContent = "Respuesta de AI";
+    const aiBtn = document.createElement('button');
+    aiBtn.type = 'button';
+    aiBtn.dataset.filter = 'ai';
+    aiBtn.textContent = 'Respuesta de AI';
 
     filters.appendChild(allBtn);
     filters.appendChild(userBtn);
     filters.appendChild(aiBtn);
 
-    const list = document.createElement("div");
-    list.id = "__cg_nav_list";
+    const list = document.createElement('div');
+    list.id = '__cg_nav_list';
 
     box.appendChild(header);
     box.appendChild(filters);
     box.appendChild(list);
     overlay.appendChild(box);
 
-    overlay.addEventListener("click", (event) => {
+    overlay.addEventListener('click', (event) => {
       if (event.target === overlay) closeListModal();
     });
-    closeBtn.addEventListener("click", closeListModal);
+    closeBtn.addEventListener('click', closeListModal);
 
-    overlay.querySelectorAll("[data-filter]").forEach((btn) => {
-      btn.addEventListener("click", () => {
+    overlay.querySelectorAll('[data-filter]').forEach((btn) => {
+      btn.addEventListener('click', () => {
         STATE.filterMode = btn.dataset.filter;
         STATE.navLockUntil = 0;
         STATE.navLockIndex = -1;
@@ -2796,12 +3155,12 @@
     refreshThemeControls();
 
     const escHandler = (event) => {
-      if (event.key === "Escape") {
+      if (event.key === 'Escape') {
         closeListModal();
-        document.removeEventListener("keydown", escHandler, true);
+        document.removeEventListener('keydown', escHandler, true);
       }
     };
-    document.addEventListener("keydown", escHandler, true);
+    document.addEventListener('keydown', escHandler, true);
   }
 
   function closeListModal() {
@@ -2812,46 +3171,44 @@
 
   function markActiveFilter() {
     if (!STATE.listModal) return;
-    STATE.listModal.querySelectorAll("[data-filter]").forEach((btn) => {
-      btn.classList.toggle("__active", btn.dataset.filter === STATE.filterMode);
+    STATE.listModal.querySelectorAll('[data-filter]').forEach((btn) => {
+      btn.classList.toggle('__active', btn.dataset.filter === STATE.filterMode);
     });
   }
 
   function renderListBody() {
     if (!STATE.listModal) return;
 
-    const list = STATE.listModal.querySelector("#__cg_nav_list");
+    const list = STATE.listModal.querySelector('#__cg_nav_list');
     if (!list) return;
 
-    list.textContent = "";
+    list.textContent = '';
 
     if (!STATE.items.length) {
-      const empty = document.createElement("div");
-      empty.className = "__cg_nav_empty";
-      empty.textContent = "No se encontraron elementos para este filtro.";
+      const empty = document.createElement('div');
+      empty.className = '__cg_nav_empty';
+      empty.textContent = 'No se encontraron elementos para este filtro.';
       list.appendChild(empty);
       return;
     }
 
     STATE.items.forEach((item, index) => {
-      const row = document.createElement("div");
-      row.className =
-        "__cg_nav_row" + (index === STATE.currentIndex ? " __active" : "");
+      const row = document.createElement('div');
+      row.className = '__cg_nav_row' + (index === STATE.currentIndex ? ' __active' : '');
 
-      const left = document.createElement("div");
-      const badge = document.createElement("span");
-      badge.className =
-        "__cg_nav_badge " + (item.type === "user" ? "__user" : "__ai");
+      const left = document.createElement('div');
+      const badge = document.createElement('span');
+      badge.className = '__cg_nav_badge ' + (item.type === 'user' ? '__user' : '__ai');
       badge.textContent = FILTER_LABELS[item.type];
       left.appendChild(badge);
 
-      const right = document.createElement("div");
+      const right = document.createElement('div');
       right.textContent = item.preview;
 
       row.appendChild(left);
       row.appendChild(right);
 
-      row.addEventListener("click", () => {
+      row.addEventListener('click', () => {
         scrollToItem(index);
         closeListModal();
       });
@@ -2895,24 +3252,14 @@
   function isEditableTarget(target) {
     if (!(target instanceof Element)) return false;
     if (target.isContentEditable) return true;
-    const tagName = target.tagName ? target.tagName.toUpperCase() : "";
-    return (
-      tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT"
-    );
+    const tagName = target.tagName ? target.tagName.toUpperCase() : '';
+    return tagName === 'INPUT' || tagName === 'TEXTAREA' || tagName === 'SELECT';
   }
 
   function handlePotentialKeyboardScroll(event) {
     if (isEditableTarget(event.target)) return;
 
-    const scrollKeys = new Set([
-      "PageUp",
-      "PageDown",
-      "Home",
-      "End",
-      "ArrowUp",
-      "ArrowDown",
-      " ",
-    ]);
+    const scrollKeys = new Set(['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown', ' ']);
     if (!scrollKeys.has(event.key)) return;
 
     handleManualScrollIntent();
@@ -2931,22 +3278,14 @@
       characterData: true,
     });
 
-    window.addEventListener("scroll", debouncedViewportUpdate, {
-      passive: true,
-    });
-    document.addEventListener("scroll", debouncedViewportUpdate, true);
-    document.addEventListener("wheel", handleManualScrollIntent, {
-      passive: true,
-      capture: true,
-    });
-    document.addEventListener("touchmove", handleManualScrollIntent, {
-      passive: true,
-      capture: true,
-    });
-    document.addEventListener("keydown", handlePotentialKeyboardScroll, true);
-    window.addEventListener("resize", debouncedScan, { passive: true });
-    window.addEventListener("resize", debouncedReposition, { passive: true });
-    document.addEventListener("visibilitychange", () => {
+    window.addEventListener('scroll', debouncedViewportUpdate, { passive: true });
+    document.addEventListener('scroll', debouncedViewportUpdate, true);
+    document.addEventListener('wheel', handleManualScrollIntent, { passive: true, capture: true });
+    document.addEventListener('touchmove', handleManualScrollIntent, { passive: true, capture: true });
+    document.addEventListener('keydown', handlePotentialKeyboardScroll, true);
+    window.addEventListener('resize', debouncedScan, { passive: true });
+    window.addEventListener('resize', debouncedReposition, { passive: true });
+    document.addEventListener('visibilitychange', () => {
       if (STATE.alarmEnabled && !document.hidden) {
         initAlarmAudio();
       }
@@ -2954,12 +3293,12 @@
 
     if (COLOR_SCHEME_QUERY) {
       const onThemeChange = () => {
-        if (STATE.themeMode === "auto") applyTheme();
+        if (STATE.themeMode === 'auto') applyTheme();
       };
 
-      if (typeof COLOR_SCHEME_QUERY.addEventListener === "function") {
-        COLOR_SCHEME_QUERY.addEventListener("change", onThemeChange);
-      } else if (typeof COLOR_SCHEME_QUERY.addListener === "function") {
+      if (typeof COLOR_SCHEME_QUERY.addEventListener === 'function') {
+        COLOR_SCHEME_QUERY.addEventListener('change', onThemeChange);
+      } else if (typeof COLOR_SCHEME_QUERY.addListener === 'function') {
         COLOR_SCHEME_QUERY.addListener(onThemeChange);
       }
     }
@@ -2981,7 +3320,7 @@
         refreshAlarmControls();
       }
       startObservers();
-    } catch (_) {}
+    } catch (_) { }
   }
 
   function boot() {
@@ -2992,8 +3331,8 @@
     init();
   }
 
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", boot, { once: true });
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot, { once: true });
   } else {
     boot();
   }
