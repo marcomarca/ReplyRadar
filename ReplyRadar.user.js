@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         ReplyRadar
 // @namespace    https://github.com/marcomarca/ReplyRadar
-// @version      1.5.1
-// @description  Navegador flotante de conversaciones con menú superior, alarma, autoenvío seguro al estar listo y control de volumen para ChatGPT y Gemini.
+// @version      1.7.0
+// @description  Navegador flotante de conversaciones con alarma activable, repetición configurable de 0 a 5 minutos, autoenvío seguro y control de volumen para ChatGPT y Gemini.
 // @author       marcomarca
 // @homepageURL  https://github.com/marcomarca/ReplyRadar
 // @supportURL   https://github.com/marcomarca/ReplyRadar/issues
@@ -52,7 +52,15 @@
     alarmEnabled: '__cg_nav_alarm_enabled_v1',
     alarmVolume: '__cg_nav_alarm_volume_v1',
     alarmTone: '__cg_nav_alarm_tone_v1',
+    continuousAlarmInterval: '__cg_nav_alarm_continuous_interval_v1',
+    continuousAlarmPending: '__cg_nav_alarm_continuous_pending_v1',
+    continuousAlarmMessage: '__cg_nav_alarm_continuous_message_v1',
   };
+
+  const LEGACY_ALARM_MODE_STORAGE_KEY = '__cg_nav_alarm_mode_v1';
+  const CONTINUOUS_ALARM_INTERVAL_DEFAULT_MIN = 0;
+  const CONTINUOUS_ALARM_INTERVAL_MIN = 0;
+  const CONTINUOUS_ALARM_INTERVAL_MAX = 5;
 
   const ALARM_COOLDOWN_MS = 13500;
   const ALARM_CHIME_REPEAT_COUNT = 2;
@@ -338,6 +346,10 @@
     alarmAudioCtx: null,
     alarmKeepAliveAudio: null,
     lastAlarmAt: 0,
+    continuousAlarmIntervalMin: CONTINUOUS_ALARM_INTERVAL_DEFAULT_MIN,
+    continuousAlarmTimer: null,
+    continuousAlarmPending: false,
+    continuousAlarmMessage: '',
     autoSendArmed: false,
     autoSendSent: false,
     autoSendObserver: null,
@@ -793,6 +805,48 @@
     const storedAlarmEnabled = localStorage.getItem(STORAGE_KEYS.alarmEnabled);
     STATE.alarmEnabled = storedAlarmEnabled === '1';
 
+    const storedContinuousAlarmIntervalRaw = localStorage.getItem(STORAGE_KEYS.continuousAlarmInterval);
+    if (storedContinuousAlarmIntervalRaw !== null) {
+      STATE.continuousAlarmIntervalMin = clampContinuousAlarmInterval(
+        Number(storedContinuousAlarmIntervalRaw),
+      );
+    }
+
+    // Migración única desde 1.6.0: el antiguo tercer estado "Continua" pasa al deslizador.
+    // Si antes era Activada/Desactivada, se normaliza a 0 = sin repetir.
+    const legacyAlarmMode = localStorage.getItem(LEGACY_ALARM_MODE_STORAGE_KEY);
+    if (legacyAlarmMode === 'continuous') {
+      STATE.alarmEnabled = true;
+      if (STATE.continuousAlarmIntervalMin <= 0) {
+        STATE.continuousAlarmIntervalMin = 1;
+      }
+    } else if (legacyAlarmMode === 'once' || legacyAlarmMode === 'off') {
+      STATE.alarmEnabled = legacyAlarmMode === 'once';
+      STATE.continuousAlarmIntervalMin = 0;
+    }
+
+    try {
+      localStorage.setItem(STORAGE_KEYS.alarmEnabled, STATE.alarmEnabled ? '1' : '0');
+      localStorage.setItem(
+        STORAGE_KEYS.continuousAlarmInterval,
+        String(STATE.continuousAlarmIntervalMin),
+      );
+      if (legacyAlarmMode !== null) localStorage.removeItem(LEGACY_ALARM_MODE_STORAGE_KEY);
+    } catch (_) { }
+
+    try {
+      STATE.continuousAlarmPending =
+        STATE.alarmEnabled
+        && STATE.continuousAlarmIntervalMin > 0
+        && sessionStorage.getItem(STORAGE_KEYS.continuousAlarmPending) === '1';
+      STATE.continuousAlarmMessage = STATE.continuousAlarmPending
+        ? (sessionStorage.getItem(STORAGE_KEYS.continuousAlarmMessage) || '')
+        : '';
+    } catch (_) {
+      STATE.continuousAlarmPending = false;
+      STATE.continuousAlarmMessage = '';
+    }
+
     const storedAlarmVolume = Number(localStorage.getItem(STORAGE_KEYS.alarmVolume));
     if (Number.isFinite(storedAlarmVolume)) {
       STATE.alarmVolume = clampAlarmVolume(storedAlarmVolume);
@@ -1005,7 +1059,9 @@
   }
 
   function refreshAlarmControls() {
+    const alarmLabel = STATE.alarmEnabled ? 'Activada' : 'Desactivada';
     const controls = document.querySelectorAll('[data-role="__cg_nav_alarm_toggle"]');
+
     controls.forEach((button) => {
       const isMenuControl = button.dataset.display === '__cg_nav_menu';
       if (isMenuControl) {
@@ -1014,18 +1070,20 @@
             ${getAlarmIconSvg(STATE.alarmEnabled)}
             <span>Alarma</span>
           </span>
-          <span class="__cg_nav_menu_value">${STATE.alarmEnabled ? 'Activada' : 'Desactivada'}</span>
+          <span class="__cg_nav_menu_value">${alarmLabel}</span>
         `);
       } else {
         setSafeInnerHTML(button, getAlarmIconSvg(STATE.alarmEnabled));
       }
+
       button.classList.toggle('__cg_nav_primary', STATE.alarmEnabled);
       button.classList.toggle('__cg_nav_ghost', !STATE.alarmEnabled);
       button.setAttribute('aria-pressed', STATE.alarmEnabled ? 'true' : 'false');
-      button.setAttribute('aria-label', STATE.alarmEnabled ? 'Alarma activada' : 'Alarma desactivada');
+      button.setAttribute('aria-label', `Alarma ${alarmLabel.toLowerCase()}`);
       button.title = STATE.alarmEnabled ? 'Alarma activada' : 'Alarma desactivada';
     });
 
+    refreshContinuousAlarmIntervalControls();
     refreshAlarmVolumeControls();
     refreshAlarmToneControls();
   }
@@ -1066,6 +1124,158 @@
     refreshAlarmVolumeControls();
   }
 
+  function clampContinuousAlarmInterval(value) {
+    const numeric = Math.round(Number(value));
+    if (!Number.isFinite(numeric)) return CONTINUOUS_ALARM_INTERVAL_DEFAULT_MIN;
+    return Math.min(CONTINUOUS_ALARM_INTERVAL_MAX, Math.max(CONTINUOUS_ALARM_INTERVAL_MIN, numeric));
+  }
+
+  function getContinuousAlarmIntervalLabel() {
+    const minutes = STATE.continuousAlarmIntervalMin;
+    return minutes === 0 ? 'Sin repetir' : `${minutes} min`;
+  }
+
+  function refreshContinuousAlarmIntervalControls() {
+    const label = getContinuousAlarmIntervalLabel();
+    const controls = document.querySelectorAll('[data-role="__cg_nav_continuous_interval"]');
+    controls.forEach((input) => {
+      input.value = String(STATE.continuousAlarmIntervalMin);
+      input.title = STATE.continuousAlarmIntervalMin === 0
+        ? 'Sin repetir: un único aviso por tarea completada.'
+        : `Repetir cada ${STATE.continuousAlarmIntervalMin} minuto${STATE.continuousAlarmIntervalMin === 1 ? '' : 's'} hasta visitar esta pestaña.`;
+      input.setAttribute('aria-label', `Repetición de alarma: ${label}`);
+    });
+
+    const valueLabels = document.querySelectorAll('[data-role="__cg_nav_continuous_interval_value"]');
+    valueLabels.forEach((valueLabel) => {
+      valueLabel.textContent = label;
+    });
+  }
+
+  function setContinuousAlarmInterval(value) {
+    const previousInterval = STATE.continuousAlarmIntervalMin;
+    STATE.continuousAlarmIntervalMin = clampContinuousAlarmInterval(value);
+
+    try {
+      localStorage.setItem(
+        STORAGE_KEYS.continuousAlarmInterval,
+        String(STATE.continuousAlarmIntervalMin),
+      );
+    } catch (_) { }
+
+    refreshContinuousAlarmIntervalControls();
+
+    if (STATE.continuousAlarmIntervalMin === 0) {
+      // 0 significa literalmente "sin repetir": cancela cualquier ciclo pendiente.
+      stopContinuousAlarm(true);
+      return;
+    }
+
+    if (
+      STATE.alarmEnabled
+      && STATE.continuousAlarmPending
+      && STATE.continuousAlarmIntervalMin !== previousInterval
+    ) {
+      scheduleContinuousAlarmRepeat();
+    }
+  }
+
+  function persistContinuousAlarmState() {
+    try {
+      sessionStorage.setItem(
+        STORAGE_KEYS.continuousAlarmPending,
+        STATE.continuousAlarmPending ? '1' : '0',
+      );
+
+      if (STATE.continuousAlarmMessage) {
+        sessionStorage.setItem(STORAGE_KEYS.continuousAlarmMessage, STATE.continuousAlarmMessage);
+      } else {
+        sessionStorage.removeItem(STORAGE_KEYS.continuousAlarmMessage);
+      }
+    } catch (_) { }
+  }
+
+  function clearContinuousAlarmTimer() {
+    if (!STATE.continuousAlarmTimer) return;
+    window.clearTimeout(STATE.continuousAlarmTimer);
+    STATE.continuousAlarmTimer = null;
+  }
+
+  function stopContinuousAlarm(clearPending = true) {
+    clearContinuousAlarmTimer();
+
+    if (clearPending) {
+      STATE.continuousAlarmPending = false;
+      STATE.continuousAlarmMessage = '';
+      persistContinuousAlarmState();
+    }
+  }
+
+  function isTabInForeground() {
+    return !document.hidden && document.hasFocus();
+  }
+
+  function acknowledgeContinuousAlarmIfForeground() {
+    if (!STATE.continuousAlarmPending) return false;
+    if (!isTabInForeground()) return false;
+
+    stopContinuousAlarm(true);
+    return true;
+  }
+
+  function scheduleContinuousAlarmRepeat() {
+    clearContinuousAlarmTimer();
+
+    if (
+      !STATE.alarmEnabled
+      || STATE.continuousAlarmIntervalMin <= 0
+      || !STATE.continuousAlarmPending
+    ) return;
+
+    const delayMs = STATE.continuousAlarmIntervalMin * 60 * 1000;
+    STATE.continuousAlarmTimer = window.setTimeout(() => {
+      STATE.continuousAlarmTimer = null;
+
+      if (acknowledgeContinuousAlarmIfForeground()) return;
+      if (
+        !STATE.alarmEnabled
+        || STATE.continuousAlarmIntervalMin <= 0
+        || !STATE.continuousAlarmPending
+      ) return;
+
+      triggerAlarm(STATE.continuousAlarmMessage || 'Hay una tarea completada pendiente de revisar.');
+      scheduleContinuousAlarmRepeat();
+    }, delayMs);
+  }
+
+  function armContinuousAlarm(message) {
+    if (!STATE.alarmEnabled || STATE.continuousAlarmIntervalMin <= 0) return false;
+
+    // Si la tarea termina mientras el usuario ya mira esta pestaña, no se crea un ciclo pendiente.
+    if (isTabInForeground()) {
+      stopContinuousAlarm(true);
+      return false;
+    }
+
+    STATE.continuousAlarmPending = true;
+    STATE.continuousAlarmMessage = message || 'Hay una tarea completada pendiente de revisar.';
+    persistContinuousAlarmState();
+
+    const delivered = triggerAlarm(STATE.continuousAlarmMessage);
+    scheduleContinuousAlarmRepeat();
+    return delivered;
+  }
+
+  function handleCompletedTaskAlarm(message) {
+    if (!STATE.alarmEnabled) return false;
+
+    // El deslizador define el comportamiento: 0 = un aviso; 1..5 = repetir.
+    if (STATE.continuousAlarmIntervalMin > 0) {
+      return armContinuousAlarm(message);
+    }
+
+    return triggerAlarm(message);
+  }
 
   function setAlarmEnabled(enabled) {
     STATE.alarmEnabled = !!enabled;
@@ -1079,7 +1289,14 @@
       startAlarmKeepAlive();
       initChatGptNetworkAlarm();
       initGeminiNetworkAlarm();
+
+      if (STATE.continuousAlarmIntervalMin > 0 && STATE.continuousAlarmPending) {
+        if (!acknowledgeContinuousAlarmIfForeground()) {
+          scheduleContinuousAlarmRepeat();
+        }
+      }
     } else {
+      stopContinuousAlarm(true);
       stopAlarmKeepAlive();
       resetChatGptNetworkAlarmState();
       resetGeminiNetworkAlarmState();
@@ -1143,7 +1360,7 @@
       gainParam.linearRampToValueAtTime(peak, startAt + attack);
       gainParam.setValueAtTime(peak * 0.82, startAt + attack + hold);
       gainParam.exponentialRampToValueAtTime(floor, startAt + attack + hold + release);
-    } catch (_) {}
+    } catch (_) { }
   }
 
   function createAlarmImpulseResponse(ctx, duration = 2.35, decay = 3.2) {
@@ -1212,7 +1429,7 @@
     const nodes = [dry, wet, master, highpass, lowpass, compressor, delay, delayFeedback, convolver];
     dry.__cgNavDisconnect = () => {
       nodes.forEach((node) => {
-        try { node.disconnect(); } catch (_) {}
+        try { node.disconnect(); } catch (_) { }
       });
     };
 
@@ -1311,7 +1528,7 @@
 
     dry.__cgNavDisconnect = () => {
       nodes.forEach((node) => {
-        try { node.disconnect(); } catch (_) {}
+        try { node.disconnect(); } catch (_) { }
       });
     };
 
@@ -1411,12 +1628,12 @@
     const totalMs = Math.ceil(((ALARM_CHIME_REPEAT_COUNT - 1) * ALARM_CHIME_REPEAT_INTERVAL_SEC + motifDuration + tailSeconds) * 1000);
     window.setTimeout(() => {
       scheduledNodes.forEach((node) => {
-        try { node.disconnect(); } catch (_) {}
+        try { node.disconnect(); } catch (_) { }
       });
 
       try {
         if (output && typeof output.__cgNavDisconnect === 'function') output.__cgNavDisconnect();
-      } catch (_) {}
+      } catch (_) { }
     }, totalMs);
 
     return true;
@@ -1475,7 +1692,7 @@
     window.setTimeout(() => {
       try {
         if (output && typeof output.__cgNavDisconnect === 'function') output.__cgNavDisconnect();
-      } catch (_) {}
+      } catch (_) { }
     }, totalMs);
 
     return true;
@@ -1576,7 +1793,7 @@
 
   function registerChatGptLatCompletion() {
     if (PLATFORM !== 'chatgpt' || !STATE.alarmEnabled) return false;
-    return triggerAlarm('ChatGPT terminó de responder.');
+    return handleCompletedTaskAlarm('ChatGPT terminó de responder.');
   }
 
   function hookChatGptFetch(pageWindow) {
@@ -1679,32 +1896,8 @@
   }
 
   function triggerGeminiNetworkAlarm() {
-    const now = Date.now();
-
-    // Mantiene el contrato del script dedicado: solo suena/notifica cuando Gemini está en segundo plano.
-    if (PLATFORM !== 'gemini' || !STATE.alarmEnabled || !document.hidden) return false;
-    if (now - STATE.lastAlarmAt < ALARM_COOLDOWN_MS) return false;
-
-    STATE.lastAlarmAt = now;
-
-    try {
-      initAlarmAudio();
-
-      playSelectedAlarmTone();
-
-      if (typeof GM_notification === 'function') {
-        GM_notification({
-          title: 'Gemini',
-          text: 'Flujo de red completado.',
-          timeout: 12000,
-          onclick: () => window.focus(),
-        });
-      }
-
-      return true;
-    } catch (_) {
-      return false;
-    }
+    if (PLATFORM !== 'gemini' || !STATE.alarmEnabled) return false;
+    return handleCompletedTaskAlarm('Gemini terminó de responder.');
   }
 
   function markHookedFunction(fn, markerName) {
@@ -2972,6 +3165,38 @@
     alarmBtn.setAttribute('role', 'menuitem');
     alarmBtn.addEventListener('click', toggleAlarmEnabled);
 
+    const intervalRow = document.createElement('div');
+    intervalRow.className = '__cg_nav_menu_volume';
+    intervalRow.title = '0 = sin repetir. De 1 a 5 = repetir hasta visitar esta pestaña.';
+
+    const intervalLabel = document.createElement('span');
+    intervalLabel.className = '__cg_nav_menu_label';
+    intervalLabel.textContent = 'Repetir';
+
+    const intervalInput = document.createElement('input');
+    intervalInput.type = 'range';
+    intervalInput.min = String(CONTINUOUS_ALARM_INTERVAL_MIN);
+    intervalInput.max = String(CONTINUOUS_ALARM_INTERVAL_MAX);
+    intervalInput.step = '1';
+    intervalInput.value = String(STATE.continuousAlarmIntervalMin);
+    intervalInput.dataset.role = '__cg_nav_continuous_interval';
+    intervalInput.addEventListener('input', () => {
+      setContinuousAlarmInterval(Number(intervalInput.value));
+    });
+
+    const intervalValue = document.createElement('span');
+    intervalValue.className = '__cg_nav_menu_value';
+    intervalValue.dataset.role = '__cg_nav_continuous_interval_value';
+    intervalValue.textContent = getContinuousAlarmIntervalLabel();
+
+    const intervalControl = document.createElement('span');
+    intervalControl.className = '__cg_nav_menu_label';
+    intervalControl.appendChild(intervalInput);
+    intervalControl.appendChild(intervalValue);
+
+    intervalRow.appendChild(intervalLabel);
+    intervalRow.appendChild(intervalControl);
+
     const alarmToneBtn = document.createElement('button');
     alarmToneBtn.type = 'button';
     alarmToneBtn.dataset.role = '__cg_nav_alarm_tone_toggle';
@@ -3046,6 +3271,7 @@
     menu.appendChild(openListBtn);
     menu.appendChild(themeBtn);
     menu.appendChild(alarmBtn);
+    menu.appendChild(intervalRow);
     menu.appendChild(alarmToneBtn);
     menu.appendChild(tonePicker);
     menu.appendChild(volumeRow);
@@ -3055,6 +3281,7 @@
 
     refreshThemeControls();
     refreshAlarmControls();
+    refreshContinuousAlarmIntervalControls();
     refreshAlarmVolumeControls();
     refreshAlarmToneControls();
 
@@ -3289,6 +3516,12 @@
       if (STATE.alarmEnabled && !document.hidden) {
         initAlarmAudio();
       }
+      acknowledgeContinuousAlarmIfForeground();
+    });
+
+    window.addEventListener('focus', () => {
+      if (STATE.alarmEnabled) initAlarmAudio();
+      acknowledgeContinuousAlarmIfForeground();
     });
 
     if (COLOR_SCHEME_QUERY) {
