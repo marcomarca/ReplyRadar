@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         ReplyRadar
 // @namespace    https://github.com/marcomarca/ReplyRadar
-// @version      1.7.0
+// @version      1.7.2
 // @description  Navegador flotante de conversaciones con alarma activable, repetición configurable de 0 a 5 minutos, autoenvío seguro y control de volumen para ChatGPT y Gemini.
 // @author       marcomarca
 // @homepageURL  https://github.com/marcomarca/ReplyRadar
@@ -2161,7 +2161,9 @@
         right: 0;
         bottom: calc(100% + 8px);
         width: 226px;
+        max-width: calc(100vw - 16px);
         display: grid;
+        grid-template-columns: minmax(0, 1fr);
         gap: 6px;
         padding: 8px;
         border: 1px solid var(--cg-nav-border);
@@ -2181,6 +2183,8 @@
       #__cg_nav_options_menu button,
       #__cg_nav_options_menu .__cg_nav_menu_volume {
         width: 100%;
+        min-width: 0;
+        max-width: 100%;
         min-height: 34px;
         display: flex;
         align-items: center;
@@ -2226,6 +2230,30 @@
         margin: 0;
         accent-color: var(--cg-nav-primary);
         cursor: pointer;
+      }
+
+      /* Repetir: el texto largo no puede aumentar el ancho de la columna grid. */
+      #__cg_nav_options_menu .__cg_nav_repeat_row {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) 66px;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+      #__cg_nav_options_menu .__cg_nav_repeat_control {
+        display: contents;
+      }
+      #__cg_nav_options_menu .__cg_nav_repeat_control input {
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+      }
+      #__cg_nav_options_menu .__cg_nav_repeat_value {
+        width: 66px;
+        min-width: 0;
+        text-align: right;
+        overflow: visible;
+        white-space: nowrap;
       }
       .__cg_nav_tone_picker {
         display: grid;
@@ -2406,6 +2434,18 @@
         }
         .__cg_nav_menu_volume input {
           width: 84px;
+        }
+        #__cg_nav_options_menu .__cg_nav_repeat_row {
+          grid-template-columns: auto minmax(0, 1fr) 66px;
+          gap: 7px;
+        }
+        #__cg_nav_options_menu .__cg_nav_repeat_control input {
+          width: 100%;
+          min-width: 0;
+        }
+        #__cg_nav_options_menu .__cg_nav_repeat_value {
+          width: 66px;
+          min-width: 0;
         }
         #__cg_nav_modal_box {
           width: 96vw;
@@ -3166,7 +3206,7 @@
     alarmBtn.addEventListener('click', toggleAlarmEnabled);
 
     const intervalRow = document.createElement('div');
-    intervalRow.className = '__cg_nav_menu_volume';
+    intervalRow.className = '__cg_nav_menu_volume __cg_nav_repeat_row';
     intervalRow.title = '0 = sin repetir. De 1 a 5 = repetir hasta visitar esta pestaña.';
 
     const intervalLabel = document.createElement('span');
@@ -3185,12 +3225,12 @@
     });
 
     const intervalValue = document.createElement('span');
-    intervalValue.className = '__cg_nav_menu_value';
+    intervalValue.className = '__cg_nav_menu_value __cg_nav_repeat_value';
     intervalValue.dataset.role = '__cg_nav_continuous_interval_value';
     intervalValue.textContent = getContinuousAlarmIntervalLabel();
 
     const intervalControl = document.createElement('span');
-    intervalControl.className = '__cg_nav_menu_label';
+    intervalControl.className = '__cg_nav_menu_label __cg_nav_repeat_control';
     intervalControl.appendChild(intervalInput);
     intervalControl.appendChild(intervalValue);
 
